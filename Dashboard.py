@@ -113,8 +113,11 @@ if menu == "Dashboard Geral":
         df_filtrado = df_filtrado[df_filtrado['Status'].isin(status_sel)]
     if gestor_sel:
         df_filtrado = df_filtrado[df_filtrado['Gestor'].isin(gestor_sel)]
-    if classif_sel:
+    if classif_sel and len(classif_sel) > 0:
         df_filtrado = df_filtrado[df_filtrado['Classificação'].isin(classif_sel)]
+    else:
+        df_filtrado = df_filtrado[df_filtrado['Classificação'].notna()]
+
     if finalidade_sel:
         df_filtrado = df_filtrado[df_filtrado['Finalidade'].isin(finalidade_sel)]
 
@@ -195,10 +198,6 @@ if menu == "Dashboard Geral":
     )
 
     st.plotly_chart(fig_temporal, use_container_width=True)
-
-
-
-
     st.markdown("### 🎯 Custo por Finalidade")
 
     # Agrupar os dados por finalidade
@@ -271,8 +270,11 @@ elif menu == "Análise Detalhada":
     df_filtrado = df_filtrado[df_filtrado['Criado'].dt.date.between(data_inicio, data_fim)]
     if status_sel:
         df_filtrado = df_filtrado[df_filtrado['Status'].isin(status_sel)]
-    if classif_sel:
+    if classif_sel and len(classif_sel) > 0:
         df_filtrado = df_filtrado[df_filtrado['Classificação'].isin(classif_sel)]
+    else:
+        df_filtrado = df_filtrado[df_filtrado['Classificação'].notna()]
+
     if gestor_sel:
         df_filtrado = df_filtrado[df_filtrado['Gestor'].isin(gestor_sel)]
 
@@ -336,8 +338,6 @@ elif menu == "Análise Detalhada":
             cliponaxis=False,
             hovertemplate='<b>%{y}</b><br>Valor Total: R$ %{x:,.2f}<br>Qtd Solicitações: %{customdata[0]}<extra></extra>'
         )
-
-
 
         fig_solicitante.update_traces(
             textposition='outside',
@@ -408,7 +408,10 @@ elif menu == "Reunião Manutenção Corporativa":
     df_rm = df[df['Criado'].dt.date.between(data_inicio, data_fim)]
     df_rm = df_rm[df_rm['Gestor'].isin(gestor_sel)]
     df_rm = df_rm[df_rm['Status'].isin(status_sel)]
-    df_rm = df_rm[df_rm['Classificação'].isin(classif_sel)]
+    if classif_sel and len(classif_sel) > 0:
+        df_rm = df_rm[df_rm['Classificação'].isin(classif_sel)]
+    else:
+        df_rm = df_rm[df_rm['Classificação'].notna()]
 
     custo_total = df_rm['Valor'].sum()
     qtd_registros = df_rm.shape[0]
@@ -470,11 +473,10 @@ elif menu == "Reunião Manutenção Corporativa":
 
     import time
     import threading
-    import webbrowser           
+    import webbrowser  
 
     def abrir_navegador():
         time.sleep(2)
         webbrowser.open("http://localhost:8501")
         
     threading.Thread(target=abrir_navegador).start()
-
