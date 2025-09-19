@@ -1,5 +1,7 @@
 streamlit
 pandas
 plotly
-openpyxl
 numpy
+gspread
+oauth2client
+openpyxl
