@@ -94,7 +94,7 @@ if menu == "Dashboard Geral":
 
     gestores_padrao = [
         "José Marcos", "Alex de França Silva",
-        "Wesley Duarte Assumpcao", "Renan Francisco Cunha", "José Wítalo"
+        "Wesley Duarte Assumpcao", "Renan Francisco Cunha", "José Witalo"
     ]
     status_padrao = ["Pago"]
     classificacao_padrao = ["Despesa de veículo"]
