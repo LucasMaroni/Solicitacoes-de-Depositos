@@ -261,6 +261,19 @@ def load_data(caminho_arquivo):
     if len(colunas_disponiveis) > 22:
         novo_df['Placa'] = df.iloc[:, 22]
     
+    # Adicionar colunas para Ordem de Serviço e Empresa se existirem no arquivo
+    # Ordem de Serviço - assumindo que pode estar na coluna M (índice 12) ou outra
+    if len(colunas_disponiveis) > 12:
+        novo_df['Ordem de Serviço'] = df.iloc[:, 12]
+    else:
+        novo_df['Ordem de Serviço'] = 'Não informada'
+    
+    # Empresa - assumindo que pode estar na coluna N (índice 13) ou outra
+    if len(colunas_disponiveis) > 13:
+        novo_df['Empresa'] = df.iloc[:, 13]
+    else:
+        novo_df['Empresa'] = 'Não informada'
+    
     # Criar colunas Ano e Mês
     if 'Criado' in novo_df.columns:
         novo_df['Ano'] = novo_df['Criado'].dt.year
@@ -724,19 +737,22 @@ elif menu == "Análise Detalhada":
 
             st.plotly_chart(fig_solicitante, use_container_width=True)
 
-    # Tabela de dados
+    # Tabela de dados - AGORA COM AS NOVAS COLUNAS
     st.markdown("### 📋 Tabela de Solicitações")
     if not df_filtrado.empty:
-        # Selecionar colunas relevantes para mostrar
-        colunas_para_mostrar = ['ID', 'Solicitante', 'Valor', 'Finalidade', 'Classificação', 'Status', 'Criado']
+        # Selecionar colunas relevantes para mostrar - INCLUINDO AS NOVAS COLUNAS
+        colunas_para_mostrar = ['ID', 'Solicitante', 'Valor', 'Finalidade', 'Classificação', 
+                               'Status', 'Criado', 'Ordem de Serviço', 'Empresa']  # Adicionadas as novas colunas
         colunas_existentes = [col for col in colunas_para_mostrar if col in df_filtrado.columns]
         
         # Formatar a tabela
         df_display = df_filtrado[colunas_existentes].copy()
-        df_display['Criado'] = df_display['Criado'].dt.strftime('%d/%m/%Y %H:%M')
+        if 'Criado' in df_display.columns:
+            df_display['Criado'] = df_display['Criado'].dt.strftime('%d/%m/%Y %H:%M')
         
         # Formatar a coluna Valor no formato brasileiro
-        df_display['Valor'] = df_display['Valor'].apply(formatar_brasileiro)
+        if 'Valor' in df_display.columns:
+            df_display['Valor'] = df_display['Valor'].apply(formatar_brasileiro)
         
         st.dataframe(df_display, use_container_width=True, height=400)
         
@@ -882,8 +898,10 @@ elif menu == "Reunião Manutenção Corporativa":
     # Tabela detalhada
     st.markdown("### 📋 Tabela Detalhada")
     if not df_rm.empty:
-        # Definir colunas para mostrar
-        colunas_desejadas = ['ID', 'Title', 'Valor', 'Finalidade', 'Solicitante', 'Descrição', 'Gestor', 'Classificação', 'Criado']
+        # Definir colunas para mostrar - TAMBÉM ADICIONANDO AS NOVAS COLUNAS AQUI
+        colunas_desejadas = ['ID', 'Title', 'Valor', 'Finalidade', 'Solicitante', 
+                            'Descrição', 'Gestor', 'Classificação', 'Criado',
+                            'Ordem de Serviço', 'Empresa']  # Adicionadas as novas colunas
         colunas_existentes = [col for col in colunas_desejadas if col in df_rm.columns]
         
         # Formatar a tabela
