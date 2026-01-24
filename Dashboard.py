@@ -1,11 +1,9 @@
-# app.py - Dashboard Completo de Análise de Custos Diários
 import dash
 from dash import dcc, html, Input, Output, dash_table, State
 import dash_bootstrap_components as dbc
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import numpy as np
 from datetime import datetime, timedelta
 import base64
@@ -13,185 +11,176 @@ import io
 import warnings
 warnings.filterwarnings('ignore')
 
-# ============================================================================
-# CONFIGURAÇÃO DA APLICAÇÃO
-# ============================================================================
+# Inicializar aplicação Dash
 app = dash.Dash(
     __name__,
     external_stylesheets=[
         dbc.themes.BOOTSTRAP,
         dbc.icons.FONT_AWESOME,
-        'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap'
+        'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css'
     ],
     suppress_callback_exceptions=True,
     meta_tags=[
-        {'name': 'viewport', 'content': 'width=device-width, initial-scale=1.0'}
+        {"name": "viewport", "content": "width=device-width, initial-scale=1"}
     ]
 )
 
-app.title = "📊 Dashboard de Custos Diários - Solicitações de Depósitos"
-server = app.server
+app.title = "Dashboard de Custos Diários - Solicitações de Depósitos"
 
 # ============================================================================
-# FUNÇÕES AUXILIARES
+# FUNÇÕES DE CARREGAMENTO E PROCESSAMENTO DE DADOS
 # ============================================================================
-def parse_contents(contents, filename):
-    """Processa arquivo Excel enviado"""
-    content_type, content_string = contents.split(',')
-    decoded = base64.b64decode(content_string)
-    
+
+def load_and_process_data(uploaded_file=None, file_path=None):
+    """Carrega e processa os dados do Excel"""
     try:
-        if 'xlsx' in filename or 'xls' in filename:
-            # Ler o arquivo Excel
-            df = pd.read_excel(io.BytesIO(decoded))
-            return df
-    except Exception as e:
-        print(f"Erro ao processar arquivo: {e}")
-        return None
-
-def process_dataframe(df):
-    """Processa o dataframe para análise"""
-    if df is None or df.empty:
-        return None
-    
-    df_processed = df.copy()
-    
-    # Converter tipos de dados
-    # ID
-    if 'ID' in df_processed.columns:
-        df_processed['ID'] = pd.to_numeric(df_processed['ID'], errors='coerce')
-    
-    # Valor - tratamento robusto
-    if 'Valor' in df_processed.columns:
-        def clean_value(x):
-            if pd.isna(x):
-                return np.nan
-            try:
-                # Converter para string
-                x_str = str(x)
-                # Remover caracteres não numéricos exceto ponto e vírgula
-                x_str = ''.join(c for c in x_str if c.isdigit() or c in ',.-')
-                # Substituir vírgula por ponto se for separador decimal
-                if ',' in x_str and '.' not in x_str:
-                    # Se tem uma vírgula e é seguida por menos de 3 dígitos, provavelmente é decimal
-                    parts = x_str.split(',')
-                    if len(parts) == 2 and len(parts[1]) <= 2:
-                        x_str = x_str.replace(',', '.')
-                    else:
-                        # Remover todas as vírgulas
-                        x_str = x_str.replace(',', '')
-                elif ',' in x_str and '.' in x_str:
-                    # Se tem ambos, remover vírgulas
-                    x_str = x_str.replace(',', '')
-                
-                # Remover pontos extras (milhares)
-                if '.' in x_str:
-                    parts = x_str.split('.')
-                    if len(parts) > 2:  # Tem separador de milhares
-                        x_str = parts[0] + ''.join(parts[1:])
-                
-                # Converter para float
-                return float(x_str)
-            except:
-                return np.nan
+        if uploaded_file:
+            # Se foi feito upload
+            content_type, content_string = uploaded_file.split(',')
+            decoded = base64.b64decode(content_string)
+            df = pd.read_excel(io.BytesIO(decoded), dtype=str)
+        elif file_path:
+            # Se está usando arquivo local
+            df = pd.read_excel(file_path, dtype=str)
+        else:
+            # Dados de exemplo (para demonstração)
+            df = create_sample_data()
         
-        df_processed['Valor'] = df_processed['Valor'].apply(clean_value)
-    
-    # Datas
-    date_columns = ['Criado', 'Modificado']
-    for col in date_columns:
-        if col in df_processed.columns:
-            df_processed[col] = pd.to_datetime(df_processed[col], errors='coerce')
-    
-    # Extrair features de data
-    if 'Criado' in df_processed.columns:
-        df_processed['Data_Criacao'] = df_processed['Criado'].dt.date
-        df_processed['Ano_Mes'] = df_processed['Criado'].dt.to_period('M').astype(str)
-        df_processed['Mes'] = df_processed['Criado'].dt.month
-        df_processed['Dia'] = df_processed['Criado'].dt.day
-        df_processed['Dia_Semana'] = df_processed['Criado'].dt.day_name()
-        df_processed['Hora_Criacao'] = df_processed['Criado'].dt.hour
-        df_processed['Minuto_Criacao'] = df_processed['Criado'].dt.minute
+        print(f"✅ Dados carregados: {len(df)} registros")
         
-        # Traduzir dias da semana
-        dias_portugues = {
-            'Monday': 'Segunda',
-            'Tuesday': 'Terça',
-            'Wednesday': 'Quarta',
-            'Thursday': 'Quinta',
-            'Friday': 'Sexta',
-            'Saturday': 'Sábado',
-            'Sunday': 'Domingo'
+        # Padronizar nomes das colunas
+        df.columns = df.columns.str.strip()
+        
+        # Verificar colunas obrigatórias
+        required_columns = ['ID', 'Title', 'Status', 'Classificação', 'Finalidade', 
+                          'Valor', 'Nome Motorista', 'Solicitante', 'Criado']
+        
+        # Renomear colunas comuns
+        column_mapping = {
+            'Placa Cavalo/Carreta': 'Placa',
+            'Ordem de Serviço': 'Ordem_Servico',
+            'Conta corrente / poupança': 'Conta',
+            'Nome Favorecido': 'Favorecido'
         }
-        df_processed['Dia_Semana_PT'] = df_processed['Dia_Semana'].map(dias_portugues)
-    
-    # Criar faixas de valor
-    if 'Valor' in df_processed.columns:
-        bins = [0, 100, 500, 1000, 5000, float('inf')]
-        labels = ['0-100', '101-500', '501-1000', '1001-5000', '5000+']
-        df_processed['Faixa_Valor'] = pd.cut(df_processed['Valor'], bins=bins, labels=labels)
-    
-    return df_processed
+        
+        for old_name, new_name in column_mapping.items():
+            if old_name in df.columns:
+                df = df.rename(columns={old_name: new_name})
+        
+        # Converter tipos de dados
+        # ID
+        if 'ID' in df.columns:
+            df['ID'] = pd.to_numeric(df['ID'], errors='coerce')
+        
+        # Valor - processamento robusto
+        if 'Valor' in df.columns:
+            df['Valor'] = df['Valor'].astype(str)
+            # Remover caracteres não numéricos, exceto ponto, vírgula e hífen
+            df['Valor'] = df['Valor'].str.replace(r'[^\d.,-]', '', regex=True)
+            # Substituir vírgula por ponto para decimal
+            df['Valor'] = df['Valor'].str.replace(',', '.', regex=False)
+            # Remover múltiplos pontos
+            df['Valor'] = df['Valor'].apply(lambda x: self._fix_multiple_dots(x) if isinstance(x, str) else x)
+            df['Valor'] = pd.to_numeric(df['Valor'], errors='coerce')
+        
+        # Datas
+        date_columns = ['Criado', 'Modificado']
+        for col in date_columns:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True)
+        
+        # Extrair features de data
+        if 'Criado' in df.columns:
+            df['Data_Criacao'] = df['Criado'].dt.date
+            df['Mes_Criacao'] = df['Criado'].dt.to_period('M').astype(str)
+            df['Ano_Criacao'] = df['Criado'].dt.year
+            df['Dia_Semana'] = df['Criado'].dt.day_name()
+            df['Hora_Criacao'] = df['Criado'].dt.hour
+            df['Dia_Mes'] = df['Criado'].dt.day
+        
+        # Processar empresa
+        if 'Empresa' in df.columns:
+            df['Empresa'] = df['Empresa'].fillna('Não Informada').astype(str).str.strip()
+        else:
+            df['Empresa'] = 'Não Informada'
+        
+        # Processar ordem de serviço
+        if 'Ordem_Servico' in df.columns:
+            df['Ordem_Servico'] = df['Ordem_Servico'].fillna('Não Informada').astype(str).str.strip()
+        else:
+            df['Ordem_Servico'] = 'Não Informada'
+        
+        # Classificar por data
+        if 'Criado' in df.columns:
+            df = df.sort_values('Criado', ascending=False)
+        
+        print(f"✅ Processamento concluído: {len(df)} registros válidos")
+        return df
+        
+    except Exception as e:
+        print(f"❌ Erro ao carregar dados: {str(e)}")
+        return None
 
-def create_kpi_card(title, value, icon, color, subtitle=None, change=None):
-    """Cria um card de KPI"""
-    card_content = []
-    
-    # Ícone e título
-    card_content.append(
-        html.Div([
-            html.I(className=f"{icon} me-2", style={'color': color}),
-            html.Span(title, className="text-muted small")
-        ], className="d-flex align-items-center mb-2")
-    )
-    
-    # Valor principal
-    card_content.append(
-        html.H4(value, className="mb-1", style={'color': color})
-    )
-    
-    # Subtitle e change se fornecidos
-    if subtitle or change:
-        sub_content = []
-        if subtitle:
-            sub_content.append(html.Span(subtitle, className="text-muted small me-2"))
-        if change:
-            change_color = "text-success" if change >= 0 else "text-danger"
-            change_icon = "fa-arrow-up" if change >= 0 else "fa-arrow-down"
-            sub_content.append(
-                html.Span([
-                    html.I(className=f"fas {change_icon} me-1"),
-                    f"{abs(change):.1f}%"
-                ], className=f"small {change_color}")
-            )
-        card_content.append(html.Div(sub_content))
-    
-    return dbc.Card(
-        dbc.CardBody(card_content),
-        className="h-100 shadow-sm border-0"
-    )
+def _fix_multiple_dots(x):
+    """Corrige múltiplos pontos em números"""
+    if not isinstance(x, str):
+        return x
+    parts = x.split('.')
+    if len(parts) > 2:
+        # Se tiver mais de um ponto, mantém apenas o último como decimal
+        return parts[0] + '.' + ''.join(parts[1:])
+    return x
 
-def create_filter_card(title, children):
-    """Cria um card de filtro"""
-    return dbc.Card([
-        dbc.CardHeader(title, className="bg-light"),
-        dbc.CardBody(children)
-    ], className="shadow-sm mb-3")
+def create_sample_data():
+    """Cria dados de exemplo para demonstração"""
+    dates = pd.date_range(start='2026-01-01', end='2026-01-07', freq='H')
+    n_samples = min(100, len(dates))
+    
+    data = {
+        'ID': range(1, n_samples + 1),
+        'Title': [f'Solicitação {i}' for i in range(1, n_samples + 1)],
+        'Status': ['Pago'] * n_samples,
+        'Classificação': np.random.choice(['Despesa de Veiculo', 'Despesa de Viagem', 'Despesa Motorista'], n_samples),
+        'Finalidade': np.random.choice(['Estacionamento', 'Uber', 'Passagem', 'Adto', 'Manutenção'], n_samples),
+        'Valor': np.random.uniform(50, 1000, n_samples),
+        'Nome Motorista': [f'Motorista {i}' for i in range(1, n_samples + 1)],
+        'Solicitante': np.random.choice(['Solicitante A', 'Solicitante B', 'Solicitante C'], n_samples),
+        'Criado': dates[:n_samples],
+        'Empresa': np.random.choice(['Transmaroni', 'TKS', 'Outra'], n_samples),
+        'Ordem_Servico': np.random.choice(['OS-001', 'OS-002', 'OS-003', 'Não Informada'], n_samples),
+        'Descrição': [f'Descrição da solicitação {i}' for i in range(1, n_samples + 1)],
+        'Placa': np.random.choice(['ABC1D23', 'XYZ4E56', 'DEF7G89'], n_samples)
+    }
+    
+    return pd.DataFrame(data)
 
 # ============================================================================
-# LAYOUT PRINCIPAL
+# LAYOUT DO DASHBOARD
 # ============================================================================
+
+# Inicializar com dados de exemplo
+df = create_sample_data()
+
+# Calcular estatísticas iniciais
+total_gasto = df['Valor'].sum() if 'Valor' in df.columns else 0
+total_solicitacoes = len(df)
+media_valor = df['Valor'].mean() if 'Valor' in df.columns else 0
+top_categoria = df['Classificação'].value_counts().index[0] if not df['Classificação'].empty else "N/A"
+empresas_unicas = df['Empresa'].nunique()
+ordens_servico = df['Ordem_Servico'].nunique()
+
+# Layout principal
 app.layout = dbc.Container([
     # Armazenamento de dados
-    dcc.Store(id='stored-data'),
-    dcc.Store(id='filtered-data'),
+    dcc.Store(id='data-store', data=df.to_dict('records')),
+    dcc.Store(id='filtered-data-store'),
     
     # Upload de arquivo
     dcc.Upload(
         id='upload-data',
         children=html.Div([
-            html.I(className="fas fa-cloud-upload-alt me-2"),
-            'Arraste ou clique para fazer upload do Excel'
+            '📤 Arraste ou ',
+            html.A('Selecione um arquivo Excel')
         ]),
         style={
             'width': '100%',
@@ -207,1035 +196,1519 @@ app.layout = dbc.Container([
         multiple=False
     ),
     
-    # Loading overlay
-    dcc.Loading(
-        id="loading-overlay",
-        type="circle",
-        children=[
-            # Cabeçalho
-            dbc.Row([
-                dbc.Col([
-                    html.Div([
-                        html.H1("📊 Dashboard de Custos Diários", 
-                               className="text-primary mb-2"),
-                        html.P("Análise inteligente de solicitações de depósitos e despesas operacionais", 
-                              className="text-muted lead mb-4"),
-                        html.Hr()
-                    ])
-                ], width=12)
-            ], className="mb-4"),
-            
-            # Cards de KPIs
-            dbc.Row(id="kpi-cards", className="mb-4"),
-            
-            # Filtros
+    # Cabeçalho
+    dbc.Row([
+        dbc.Col([
+            html.H1("📊 Dashboard de Custos Diários", 
+                   className="text-primary mb-3"),
+            html.P("Análise completa de solicitações de depósitos e despesas operacionais", 
+                  className="text-muted lead")
+        ], width=12)
+    ], className="mb-4"),
+    
+    # Cards de resumo
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H4(f"R$ {total_gasto:,.2f}", 
+                           className="card-title text-success"),
+                    html.P("Total Gasto", className="card-text"),
+                    html.Small(f"Média: R$ {media_valor:,.2f}", 
+                             className="text-muted")
+                ])
+            ], className="shadow-sm h-100")
+        ], md=3, sm=6),
+        
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H4(f"{total_solicitacoes:,}", 
+                           className="card-title text-primary"),
+                    html.P("Total de Solicitações", className="card-text"),
+                    html.Small(f"Última: {df['Criado'].max().strftime('%d/%m/%Y') if 'Criado' in df.columns else 'N/A'}", 
+                             className="text-muted")
+                ])
+            ], className="shadow-sm h-100")
+        ], md=3, sm=6),
+        
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H4(f"{empresas_unicas}", 
+                           className="card-title text-warning"),
+                    html.P("Empresas", className="card-text"),
+                    html.Small(f"Principal: {df['Empresa'].mode()[0] if not df['Empresa'].empty else 'N/A'}", 
+                             className="text-muted")
+                ])
+            ], className="shadow-sm h-100")
+        ], md=3, sm=6),
+        
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H4(f"{ordens_servico}", 
+                           className="card-title text-info"),
+                    html.P("Ordens de Serviço", className="card-text"),
+                    html.Small(f"Mais comum: {df['Ordem_Servico'].mode()[0] if not df['Ordem_Servico'].empty and df['Ordem_Servico'].mode().any() else 'N/A'}", 
+                             className="text-muted")
+                ])
+            ], className="shadow-sm h-100")
+        ], md=3, sm=6)
+    ], className="mb-4"),
+    
+    # Navegação por tabs
+    dbc.Tabs([
+        # Tab 1: Visão Geral
+        dbc.Tab(label="🏠 Visão Geral", tab_id="tab-overview", children=[
             dbc.Row([
                 dbc.Col([
                     dbc.Card([
-                        dbc.CardHeader([
-                            html.H5("🔍 Filtros Avançados", className="mb-0"),
-                            dbc.Button("Aplicar Filtros", id="btn-apply-filters", 
-                                      color="primary", size="sm", className="float-end")
-                        ]),
+                        dbc.CardHeader("🔍 Filtros Avançados"),
                         dbc.CardBody([
                             dbc.Row([
                                 dbc.Col([
                                     html.Label("Classificação:", className="form-label"),
                                     dcc.Dropdown(
                                         id='filtro-classificacao',
-                                        options=[],
-                                        multi=True,
-                                        placeholder="Selecione classificação..."
+                                        options=[{'label': 'Todas', 'value': 'Todas'}] + 
+                                                [{'label': cat, 'value': cat} for cat in sorted(df['Classificação'].unique())],
+                                        value='Todas',
+                                        multi=False,
+                                        clearable=False,
+                                        placeholder="Selecione a classificação..."
                                     )
-                                ], md=6, lg=3),
+                                ], md=3, sm=6),
+                                
+                                dbc.Col([
+                                    html.Label("Empresa:", className="form-label"),
+                                    dcc.Dropdown(
+                                        id='filtro-empresa',
+                                        options=[{'label': 'Todas', 'value': 'Todas'}] + 
+                                                [{'label': emp, 'value': emp} for emp in sorted(df['Empresa'].unique())],
+                                        value='Todas',
+                                        multi=False,
+                                        clearable=False,
+                                        placeholder="Selecione a empresa..."
+                                    )
+                                ], md=3, sm=6),
                                 
                                 dbc.Col([
                                     html.Label("Finalidade:", className="form-label"),
                                     dcc.Dropdown(
                                         id='filtro-finalidade',
-                                        options=[],
-                                        multi=True,
-                                        placeholder="Selecione finalidade..."
+                                        options=[{'label': 'Todas', 'value': 'Todas'}] + 
+                                                [{'label': fin, 'value': fin} for fin in sorted(df['Finalidade'].unique())],
+                                        value='Todas',
+                                        multi=False,
+                                        clearable=False,
+                                        placeholder="Selecione a finalidade..."
                                     )
-                                ], md=6, lg=3),
+                                ], md=3, sm=6),
                                 
-                                dbc.Col([
-                                    html.Label("Período:", className="form-label"),
-                                    dcc.DatePickerRange(
-                                        id='filtro-data',
-                                        start_date=None,
-                                        end_date=None,
-                                        display_format='DD/MM/YYYY',
-                                        className="w-100"
-                                    )
-                                ], md=6, lg=3),
-                                
-                                dbc.Col([
-                                    html.Label("Faixa de Valor (R$):", className="form-label"),
-                                    dcc.RangeSlider(
-                                        id='filtro-valor',
-                                        min=0,
-                                        max=10000,
-                                        step=100,
-                                        value=[0, 10000],
-                                        marks={0: '0', 5000: '5.000', 10000: '10.000+'},
-                                        tooltip={"placement": "bottom", "always_visible": True}
-                                    )
-                                ], md=6, lg=3)
-                            ], className="mb-3"),
-                            
-                            dbc.Row([
                                 dbc.Col([
                                     html.Label("Status:", className="form-label"),
                                     dcc.Dropdown(
                                         id='filtro-status',
-                                        options=[],
-                                        multi=True,
-                                        placeholder="Selecione status..."
+                                        options=[{'label': 'Todos', 'value': 'Todos'}] + 
+                                                [{'label': status, 'value': status} for status in sorted(df['Status'].unique())],
+                                        value='Todos',
+                                        multi=False,
+                                        clearable=False,
+                                        placeholder="Selecione o status..."
                                     )
-                                ], md=6, lg=3),
+                                ], md=3, sm=6)
+                            ], className="mb-3"),
+                            
+                            dbc.Row([
+                                dbc.Col([
+                                    html.Label("Período:", className="form-label"),
+                                    dcc.DatePickerRange(
+                                        id='filtro-data',
+                                        min_date_allowed=df['Criado'].min().date() if 'Criado' in df.columns else datetime.now().date(),
+                                        max_date_allowed=df['Criado'].max().date() if 'Criado' in df.columns else datetime.now().date(),
+                                        start_date=df['Criado'].min().date() if 'Criado' in df.columns else datetime.now().date(),
+                                        end_date=df['Criado'].max().date() if 'Criado' in df.columns else datetime.now().date(),
+                                        display_format='DD/MM/YYYY',
+                                        className="w-100"
+                                    )
+                                ], md=4),
                                 
                                 dbc.Col([
-                                    html.Label("Solicitante:", className="form-label"),
-                                    dcc.Dropdown(
-                                        id='filtro-solicitante',
-                                        options=[],
-                                        multi=True,
-                                        placeholder="Selecione solicitante..."
+                                    html.Label("Valor Mínimo:", className="form-label"),
+                                    dcc.Input(
+                                        id='filtro-valor-min',
+                                        type='number',
+                                        placeholder='0',
+                                        min=0,
+                                        value=0,
+                                        className="form-control"
                                     )
-                                ], md=6, lg=3),
+                                ], md=2),
                                 
                                 dbc.Col([
-                                    html.Label("Motorista:", className="form-label"),
-                                    dcc.Dropdown(
-                                        id='filtro-motorista',
-                                        options=[],
-                                        multi=True,
-                                        placeholder="Selecione motorista..."
+                                    html.Label("Valor Máximo:", className="form-label"),
+                                    dcc.Input(
+                                        id='filtro-valor-max',
+                                        type='number',
+                                        placeholder='10000',
+                                        min=0,
+                                        value=10000,
+                                        className="form-control"
                                     )
-                                ], md=6, lg=3),
+                                ], md=2),
                                 
                                 dbc.Col([
-                                    html.Label("Gestor:", className="form-label"),
+                                    html.Label("Ordenar por:", className="form-label"),
                                     dcc.Dropdown(
-                                        id='filtro-gestor',
-                                        options=[],
-                                        multi=True,
-                                        placeholder="Selecione gestor..."
+                                        id='ordenar-por',
+                                        options=[
+                                            {'label': 'Data (Mais Recente)', 'value': 'data_desc'},
+                                            {'label': 'Data (Mais Antiga)', 'value': 'data_asc'},
+                                            {'label': 'Valor (Maior)', 'value': 'valor_desc'},
+                                            {'label': 'Valor (Menor)', 'value': 'valor_asc'}
+                                        ],
+                                        value='data_desc',
+                                        clearable=False,
+                                        className="w-100"
                                     )
-                                ], md=6, lg=3)
+                                ], md=4)
                             ])
                         ])
-                    ], className="shadow-sm mb-4")
+                    ], className="mb-4")
                 ], width=12)
             ]),
             
-            # Gráficos Principais
+            # Gráficos principais
             dbc.Row([
                 dbc.Col([
                     dbc.Card([
                         dbc.CardHeader("📈 Evolução de Gastos Diários"),
                         dbc.CardBody([
-                            dcc.Graph(id='grafico-evolucao', config={'displayModeBar': True})
+                            dcc.Graph(id='grafico-evolucao-gastos')
                         ])
                     ], className="shadow-sm h-100")
-                ], lg=8),
+                ], lg=6, md=12),
                 
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("🏢 Distribuição por Empresa"),
+                        dbc.CardBody([
+                            dcc.Graph(id='grafico-empresas')
+                        ])
+                    ], className="shadow-sm h-100")
+                ], lg=6, md=12)
+            ], className="mb-4"),
+            
+            dbc.Row([
                 dbc.Col([
                     dbc.Card([
                         dbc.CardHeader("🏷️ Distribuição por Classificação"),
                         dbc.CardBody([
-                            dcc.Graph(id='grafico-classificacao', config={'displayModeBar': True})
+                            dcc.Graph(id='grafico-classificacao')
                         ])
                     ], className="shadow-sm h-100")
-                ], lg=4)
-            ], className="mb-4"),
-            
-            dbc.Row([
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardHeader("🎯 Top Finalidades"),
-                        dbc.CardBody([
-                            dcc.Graph(id='grafico-finalidades', config={'displayModeBar': True})
-                        ])
-                    ], className="shadow-sm h-100")
-                ], lg=6),
+                ], lg=4, md=6),
                 
                 dbc.Col([
                     dbc.Card([
-                        dbc.CardHeader("⏰ Distribuição por Hora do Dia"),
+                        dbc.CardHeader("🎯 Top 10 Finalidades"),
                         dbc.CardBody([
-                            dcc.Graph(id='grafico-horas', config={'displayModeBar': True})
+                            dcc.Graph(id='grafico-finalidades')
                         ])
                     ], className="shadow-sm h-100")
-                ], lg=6)
-            ], className="mb-4"),
-            
-            dbc.Row([
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardHeader("📊 Análise Detalhada por Dia da Semana"),
-                        dbc.CardBody([
-                            dcc.Graph(id='grafico-dias-semana', config={'displayModeBar': True})
-                        ])
-                    ], className="shadow-sm h-100")
-                ], lg=6),
+                ], lg=4, md=6),
                 
                 dbc.Col([
                     dbc.Card([
-                        dbc.CardHeader("💰 Distribuição de Valores (Box Plot)"),
+                        dbc.CardHeader("⏰ Distribuição por Hora"),
                         dbc.CardBody([
-                            dcc.Graph(id='grafico-boxplot', config={'displayModeBar': True})
+                            dcc.Graph(id='grafico-horas')
                         ])
                     ], className="shadow-sm h-100")
-                ], lg=6)
-            ], className="mb-4"),
-            
-            # Tabela de Dados
+                ], lg=4, md=12)
+            ], className="mb-4")
+        ]),
+        
+        # Tab 2: Análise Detalhada
+        dbc.Tab(label="🔍 Análise Detalhada", tab_id="tab-detalhada", children=[
             dbc.Row([
                 dbc.Col([
                     dbc.Card([
                         dbc.CardHeader([
-                            html.H5("📋 Detalhamento das Solicitações", className="mb-0 d-inline"),
-                            html.Div([
-                                dbc.Button(
-                                    [html.I(className="fas fa-file-csv me-2"), "CSV"],
-                                    id="btn-export-csv",
-                                    color="success",
-                                    size="sm",
-                                    className="me-2"
-                                ),
-                                dbc.Button(
-                                    [html.I(className="fas fa-file-excel me-2"), "Excel"],
-                                    id="btn-export-excel",
-                                    color="primary",
-                                    size="sm",
-                                    className="me-2"
-                                ),
-                                dbc.Button(
-                                    [html.I(className="fas fa-print me-2"), "Imprimir"],
-                                    id="btn-print",
-                                    color="secondary",
-                                    size="sm"
-                                )
+                            html.H5("📋 Tabela Detalhada de Solicitações"),
+                            dbc.ButtonGroup([
+                                dbc.Button("📥 Exportar CSV", id="btn-export-csv", color="success", size="sm"),
+                                dbc.Button("📊 Exportar Excel", id="btn-export-excel", color="primary", size="sm"),
+                                dbc.Button("🔄 Atualizar", id="btn-refresh", color="secondary", size="sm")
                             ], className="float-end")
                         ]),
                         dbc.CardBody([
                             dash_table.DataTable(
-                                id='tabela-dados',
-                                columns=[],
-                                data=[],
+                                id='tabela-detalhada',
+                                columns=[
+                                    {"name": "ID", "id": "ID", "type": "numeric"},
+                                    {"name": "Title", "id": "Title"},
+                                    {"name": "Status", "id": "Status"},
+                                    {"name": "Classificação", "id": "Classificação"},
+                                    {"name": "Finalidade", "id": "Finalidade"},
+                                    {"name": "Valor", "id": "Valor", "type": "numeric", 
+                                     "format": {"specifier": "R$ ,.2f"}},
+                                    {"name": "Empresa", "id": "Empresa"},
+                                    {"name": "Ordem Serviço", "id": "Ordem_Servico"},
+                                    {"name": "Motorista", "id": "Nome Motorista"},
+                                    {"name": "Solicitante", "id": "Solicitante"},
+                                    {"name": "Criado", "id": "Criado", "type": "datetime"},
+                                    {"name": "Placa", "id": "Placa"}
+                                ],
                                 page_size=15,
-                                style_table={'overflowX': 'auto'},
+                                page_current=0,
+                                page_action='native',
+                                style_table={
+                                    'overflowX': 'auto',
+                                    'maxHeight': '600px',
+                                    'overflowY': 'auto'
+                                },
                                 style_cell={
                                     'textAlign': 'left',
                                     'padding': '10px',
                                     'fontSize': '12px',
-                                    'fontFamily': 'Inter, sans-serif',
+                                    'fontFamily': 'Arial, sans-serif',
+                                    'minWidth': '80px',
+                                    'maxWidth': '200px',
                                     'whiteSpace': 'normal',
-                                    'height': 'auto'
+                                    'textOverflow': 'ellipsis'
                                 },
                                 style_header={
-                                    'backgroundColor': '#f8f9fa',
-                                    'fontWeight': '600',
-                                    'color': '#495057',
-                                    'border': 'none'
-                                },
-                                style_data={
-                                    'border': '1px solid #e9ecef'
+                                    'backgroundColor': 'rgb(230, 230, 230)',
+                                    'fontWeight': 'bold',
+                                    'textAlign': 'center'
                                 },
                                 style_data_conditional=[
                                     {
                                         'if': {'row_index': 'odd'},
-                                        'backgroundColor': '#f8f9fa'
+                                        'backgroundColor': 'rgb(248, 248, 248)'
+                                    },
+                                    {
+                                        'if': {'column_id': 'Valor'},
+                                        'fontWeight': 'bold',
+                                        'color': 'green'
+                                    },
+                                    {
+                                        'if': {'filter_query': '{Status} = "Pago"'},
+                                        'backgroundColor': 'rgba(144, 238, 144, 0.3)'
                                     }
                                 ],
                                 filter_action="native",
                                 sort_action="native",
                                 sort_mode="multi",
-                                page_action="native",
-                                style_cell_conditional=[
-                                    {'if': {'column_id': 'ID'}, 'width': '80px'},
-                                    {'if': {'column_id': 'Valor'}, 'width': '120px'},
-                                    {'if': {'column_id': 'Criado'}, 'width': '180px'},
-                                    {'if': {'column_id': 'Status'}, 'width': '100px'},
-                                ],
-                                export_format="csv"
+                                column_selectable="single",
+                                row_selectable='multi',
+                                selected_columns=[],
+                                selected_rows=[],
+                                tooltip_data=[],
+                                tooltip_duration=None
                             )
+                        ]),
+                        dbc.CardFooter([
+                            html.Div(id='table-info', className="text-muted small")
                         ])
                     ], className="shadow-sm")
                 ], width=12)
             ], className="mb-4"),
             
-            # Downloads
-            dcc.Download(id="download-csv"),
-            dcc.Download(id="download-excel"),
-            
-            # Footer
+            # Análises específicas
             dbc.Row([
                 dbc.Col([
-                    html.Hr(),
-                    html.Div([
-                        html.P([
-                            "Dashboard desenvolvido para análise de custos diários | ",
-                            html.Span(id="data-info", className="text-muted"),
-                            html.Br(),
-                            html.Small(
-                                f"Última atualização: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
-                                className="text-muted"
+                    dbc.Card([
+                        dbc.CardHeader("🏢 Análise por Empresa"),
+                        dbc.CardBody([
+                            dcc.Graph(id='grafico-analise-empresa')
+                        ])
+                    ], className="shadow-sm h-100")
+                ], lg=6, md=12),
+                
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("🔧 Análise por Ordem de Serviço"),
+                        dbc.CardBody([
+                            dcc.Graph(id='grafico-analise-os')
+                        ])
+                    ], className="shadow-sm h-100")
+                ], lg=6, md=12)
+            ], className="mb-4")
+        ]),
+        
+        # Tab 3: Reunião Manutenção Corporativa
+        dbc.Tab(label="🏢 Reunião Manutenção", tab_id="tab-manutencao", children=[
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("📊 Relatório Corporativo - Foco em Manutenção"),
+                        dbc.CardBody([
+                            dbc.Row([
+                                dbc.Col([
+                                    html.H5("Filtros para Relatório de Manutenção", className="mb-3"),
+                                    dbc.Row([
+                                        dbc.Col([
+                                            html.Label("Tipo de Manutenção:", className="form-label"),
+                                            dcc.Dropdown(
+                                                id='filtro-manutencao-tipo',
+                                                options=[
+                                                    {'label': 'Todas', 'value': 'Todas'},
+                                                    {'label': 'Corretiva', 'value': 'Manutenção Corretiva'},
+                                                    {'label': 'Preventiva', 'value': 'Manutenção Preventiva'},
+                                                    {'label': 'Borracharia', 'value': 'Borracharia'},
+                                                    {'label': 'Reformas', 'value': 'Reformas'},
+                                                    {'label': 'Lavagem', 'value': 'Lavagem'}
+                                                ],
+                                                value='Todas',
+                                                clearable=False
+                                            )
+                                        ], md=4),
+                                        
+                                        dbc.Col([
+                                            html.Label("Empresa Responsável:", className="form-label"),
+                                            dcc.Dropdown(
+                                                id='filtro-manutencao-empresa',
+                                                options=[{'label': 'Todas', 'value': 'Todas'}] + 
+                                                        [{'label': emp, 'value': emp} for emp in sorted(df['Empresa'].unique())],
+                                                value='Todas',
+                                                clearable=False
+                                            )
+                                        ], md=4),
+                                        
+                                        dbc.Col([
+                                            html.Label("Período Específico:", className="form-label"),
+                                            dcc.DatePickerRange(
+                                                id='filtro-manutencao-data',
+                                                min_date_allowed=df['Criado'].min().date() if 'Criado' in df.columns else datetime.now().date(),
+                                                max_date_allowed=df['Criado'].max().date() if 'Criado' in df.columns else datetime.now().date(),
+                                                start_date=df['Criado'].min().date() if 'Criado' in df.columns else datetime.now().date(),
+                                                end_date=df['Criado'].max().date() if 'Criado' in df.columns else datetime.now().date(),
+                                                display_format='DD/MM/YYYY'
+                                            )
+                                        ], md=4)
+                                    ])
+                                ], width=12)
+                            ])
+                        ])
+                    ], className="mb-4")
+                ], width=12)
+            ]),
+            
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("💰 Custos de Manutenção por Empresa"),
+                        dbc.CardBody([
+                            dcc.Graph(id='grafico-manutencao-empresa')
+                        ])
+                    ], className="shadow-sm h-100")
+                ], lg=6, md=12),
+                
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("📈 Evolução dos Custos de Manutenção"),
+                        dbc.CardBody([
+                            dcc.Graph(id='grafico-manutencao-evolucao')
+                        ])
+                    ], className="shadow-sm h-100")
+                ], lg=6, md=12)
+            ], className="mb-4"),
+            
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader([
+                            "📋 Tabela de Manutenções Corporativas",
+                            dbc.Button("📥 Exportar Relatório", id="btn-export-manutencao", 
+                                      color="primary", size="sm", className="float-end")
+                        ]),
+                        dbc.CardBody([
+                            dash_table.DataTable(
+                                id='tabela-manutencao',
+                                columns=[
+                                    {"name": "ID", "id": "ID"},
+                                    {"name": "Title", "id": "Title"},
+                                    {"name": "Classificação", "id": "Classificação"},
+                                    {"name": "Finalidade", "id": "Finalidade"},
+                                    {"name": "Valor", "id": "Valor", "type": "numeric", 
+                                     "format": {"specifier": "R$ ,.2f"}},
+                                    {"name": "Empresa", "id": "Empresa"},
+                                    {"name": "Ordem Serviço", "id": "Ordem_Servico"},
+                                    {"name": "Descrição", "id": "Descrição"},
+                                    {"name": "Data", "id": "Criado"},
+                                    {"name": "Placa", "id": "Placa"}
+                                ],
+                                page_size=10,
+                                style_table={'overflowX': 'auto'},
+                                style_cell={
+                                    'textAlign': 'left',
+                                    'padding': '8px',
+                                    'fontSize': '11px',
+                                    'minWidth': '100px'
+                                },
+                                style_header={
+                                    'backgroundColor': 'rgb(240, 240, 240)',
+                                    'fontWeight': 'bold'
+                                },
+                                filter_action="native",
+                                sort_action="native",
+                                sort_mode="multi"
                             )
-                        ], className="text-center mt-3")
-                    ])
+                        ])
+                    ], className="shadow-sm")
+                ], width=12)
+            ]),
+            
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("📊 KPIs de Manutenção Corporativa"),
+                        dbc.CardBody([
+                            dbc.Row([
+                                dbc.Col([
+                                    html.H6("Custo Total de Manutenção", className="text-center"),
+                                    html.H3(id='kpi-custo-total', className="text-center text-primary"),
+                                    html.Small("Acumulado no período", className="text-muted text-center d-block")
+                                ], md=3),
+                                
+                                dbc.Col([
+                                    html.H6("Média por Ordem de Serviço", className="text-center"),
+                                    html.H3(id='kpi-media-os', className="text-center text-success"),
+                                    html.Small("Valor médio por OS", className="text-muted text-center d-block")
+                                ], md=3),
+                                
+                                dbc.Col([
+                                    html.H6("Empresa com Mais Custos", className="text-center"),
+                                    html.H4(id='kpi-empresa-top', className="text-center text-warning"),
+                                    html.Small("Maior custo de manutenção", className="text-muted text-center d-block")
+                                ], md=3),
+                                
+                                dbc.Col([
+                                    html.H6("OS Mais Frequente", className="text-center"),
+                                    html.H4(id='kpi-os-top', className="text-center text-info"),
+                                    html.Small("Ordem de serviço mais comum", className="text-muted text-center d-block")
+                                ], md=3)
+                            ])
+                        ])
+                    ], className="shadow-sm")
+                ], width=12)
+            ], className="mb-4")
+        ]),
+        
+        # Tab 4: Análise por Motorista
+        dbc.Tab(label="👤 Análise por Motorista", tab_id="tab-motorista", children=[
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("📊 Top 10 Motoristas por Valor"),
+                        dbc.CardBody([
+                            dcc.Graph(id='grafico-top-motoristas')
+                        ])
+                    ], className="shadow-sm h-100")
+                ], lg=6, md=12),
+                
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("🏢 Distribuição por Empresa (Motoristas)"),
+                        dbc.CardBody([
+                            dcc.Graph(id='grafico-motorista-empresa')
+                        ])
+                    ], className="shadow-sm h-100")
+                ], lg=6, md=12)
+            ], className="mb-4"),
+            
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("📋 Detalhamento por Motorista"),
+                        dbc.CardBody([
+                            dcc.Dropdown(
+                                id='select-motorista',
+                                options=[{'label': mot, 'value': mot} for mot in sorted(df['Nome Motorista'].unique())],
+                                placeholder="Selecione um motorista...",
+                                className="mb-3"
+                            ),
+                            html.Div(id='info-motorista')
+                        ])
+                    ], className="shadow-sm")
                 ], width=12)
             ])
-        ]
-    )
-], fluid=True, className="p-3", style={'fontFamily': 'Inter, sans-serif'})
+        ])
+    ], id="tabs", active_tab="tab-overview"),
+    
+    # Componentes para download
+    dcc.Download(id="download-csv"),
+    dcc.Download(id="download-excel"),
+    dcc.Download(id="download-manutencao"),
+    
+    # Footer
+    dbc.Row([
+        dbc.Col([
+            html.Hr(),
+            html.P([
+                html.I(className="fas fa-info-circle me-2"),
+                f"Dashboard de Custos Diários | ",
+                html.Small(f"Atualizado: {datetime.now().strftime('%d/%m/%Y %H:%M')} | "),
+                html.Small(f"Registros: {len(df):,} | "),
+                html.Small(f"Período: {df['Criado'].min().strftime('%d/%m/%Y') if 'Criado' in df.columns else 'N/A'} a {df['Criado'].max().strftime('%d/%m/%Y') if 'Criado' in df.columns else 'N/A'}")
+            ], className="text-center text-muted mt-3")
+        ], width=12)
+    ])
+], fluid=True, className="p-3")
 
 # ============================================================================
-# CALLBACKS
+# CALLBACKS PRINCIPAIS
 # ============================================================================
 
-# Callback para upload e processamento de dados
+# Callback para carregar dados do upload
 @app.callback(
-    [Output('stored-data', 'data'),
-     Output('filtro-classificacao', 'options'),
-     Output('filtro-finalidade', 'options'),
-     Output('filtro-status', 'options'),
-     Output('filtro-solicitante', 'options'),
-     Output('filtro-motorista', 'options'),
-     Output('filtro-gestor', 'options'),
-     Output('filtro-data', 'start_date'),
-     Output('filtro-data', 'end_date'),
-     Output('filtro-data', 'min_date_allowed'),
-     Output('filtro-data', 'max_date_allowed'),
-     Output('data-info', 'children')],
+    [Output('data-store', 'data'),
+     Output('filtered-data-store', 'data')],
     [Input('upload-data', 'contents')],
     [State('upload-data', 'filename')]
 )
 def update_data(contents, filename):
-    """Processa upload de arquivo e atualiza filtros"""
-    if contents is None:
-        return [dash.no_update] * 12
+    """Atualiza os dados quando um novo arquivo é carregado"""
+    if contents is not None:
+        try:
+            df = load_and_process_data(uploaded_file=contents)
+            if df is not None:
+                return df.to_dict('records'), df.to_dict('records')
+        except Exception as e:
+            print(f"Erro no upload: {str(e)}")
     
-    # Processar arquivo
-    df = parse_contents(contents, filename)
-    if df is None:
-        return [dash.no_update] * 12
-    
-    # Processar dados
-    df_processed = process_dataframe(df)
-    
-    if df_processed is None or df_processed.empty:
-        return [dash.no_update] * 12
-    
-    # Preparar opções para filtros
-    classificacao_opts = [{'label': cat, 'value': cat} 
-                         for cat in sorted(df_processed['Classificação'].dropna().unique())]
-    finalidade_opts = [{'label': fin, 'value': fin} 
-                      for fin in sorted(df_processed['Finalidade'].dropna().unique())]
-    status_opts = [{'label': stat, 'value': stat} 
-                  for stat in sorted(df_processed['Status'].dropna().unique())]
-    solicitante_opts = [{'label': sol, 'value': sol} 
-                       for sol in sorted(df_processed['Solicitante'].dropna().unique())]
-    motorista_opts = [{'label': mot, 'value': mot} 
-                     for mot in sorted(df_processed['Nome Motorista'].dropna().unique())]
-    
-    # Gestor - converter para string
-    gestor_opts = []
-    if 'Gestor' in df_processed.columns:
-        gestores = df_processed['Gestor'].dropna().unique()
-        for gestor in sorted(gestores, key=lambda x: str(x)):
-            gestor_opts.append({'label': str(gestor), 'value': str(gestor)})
-    
-    # Datas
-    if 'Criado' in df_processed.columns:
-        min_date = df_processed['Criado'].min().date()
-        max_date = df_processed['Criado'].max().date()
-        start_date = min_date
-        end_date = max_date
-    else:
-        min_date = max_date = start_date = end_date = None
-    
-    # Info
-    total_gasto = df_processed['Valor'].sum()
-    total_registros = len(df_processed)
-    data_info = f"Total: R$ {total_gasto:,.2f} | {total_registros:,} registros"
-    
-    # Converter para JSON para storage
-    df_json = df_processed.to_json(date_format='iso', orient='split')
-    
-    return [
-        df_json,
-        classificacao_opts,
-        finalidade_opts,
-        status_opts,
-        solicitante_opts,
-        motorista_opts,
-        gestor_opts,
-        start_date,
-        end_date,
-        min_date,
-        max_date,
-        data_info
-    ]
+    # Retornar dados atuais se não houver upload
+    return dash.no_update, dash.no_update
 
-# Callback para aplicar filtros
+# Callback principal para atualizar todos os gráficos
 @app.callback(
-    [Output('filtered-data', 'data'),
-     Output('kpi-cards', 'children')],
-    [Input('btn-apply-filters', 'n_clicks')],
-    [State('stored-data', 'data'),
-     State('filtro-classificacao', 'value'),
-     State('filtro-finalidade', 'value'),
-     State('filtro-data', 'start_date'),
-     State('filtro-data', 'end_date'),
-     State('filtro-valor', 'value'),
-     State('filtro-status', 'value'),
-     State('filtro-solicitante', 'value'),
-     State('filtro-motorista', 'value'),
-     State('filtro-gestor', 'value')]
-)
-def apply_filters(n_clicks, stored_data, classificacao, finalidade, start_date, 
-                  end_date, valor_range, status, solicitante, motorista, gestor):
-    """Aplica filtros aos dados"""
-    if stored_data is None:
-        return None, []
-    
-    # Carregar dados
-    df = pd.read_json(stored_data, orient='split')
-    
-    # Aplicar filtros
-    df_filtered = df.copy()
-    
-    # Filtro por classificação
-    if classificacao and len(classificacao) > 0:
-        df_filtered = df_filtered[df_filtered['Classificação'].isin(classificacao)]
-    
-    # Filtro por finalidade
-    if finalidade and len(finalidade) > 0:
-        df_filtered = df_filtered[df_filtered['Finalidade'].isin(finalidade)]
-    
-    # Filtro por data
-    if start_date and end_date:
-        df_filtered = df_filtered[
-            (df_filtered['Data_Criacao'] >= pd.to_datetime(start_date).date()) &
-            (df_filtered['Data_Criacao'] <= pd.to_datetime(end_date).date())
-        ]
-    
-    # Filtro por valor
-    if valor_range:
-        df_filtered = df_filtered[
-            (df_filtered['Valor'] >= valor_range[0]) &
-            (df_filtered['Valor'] <= valor_range[1])
-        ]
-    
-    # Filtro por status
-    if status and len(status) > 0:
-        df_filtered = df_filtered[df_filtered['Status'].isin(status)]
-    
-    # Filtro por solicitante
-    if solicitante and len(solicitante) > 0:
-        df_filtered = df_filtered[df_filtered['Solicitante'].isin(solicitante)]
-    
-    # Filtro por motorista
-    if motorista and len(motorista) > 0:
-        df_filtered = df_filtered[df_filtered['Nome Motorista'].isin(motorista)]
-    
-    # Filtro por gestor
-    if gestor and len(gestor) > 0:
-        df_filtered = df_filtered[df_filtered['Gestor'].astype(str).isin(gestor)]
-    
-    # Criar cards de KPI
-    if df_filtered.empty:
-        kpi_cards = [
-            dbc.Col([
-                dbc.Alert("Nenhum dado encontrado com os filtros aplicados", 
-                         color="warning")
-            ], width=12)
-        ]
-    else:
-        # Calcular métricas
-        total_gasto = df_filtered['Valor'].sum()
-        total_registros = len(df_filtered)
-        valor_medio = df_filtered['Valor'].mean()
-        valor_mediano = df_filtered['Valor'].median()
-        
-        # Categoria mais frequente
-        if 'Classificação' in df_filtered.columns and not df_filtered['Classificação'].empty:
-            categoria_top = df_filtered['Classificação'].mode().iloc[0] if not df_filtered['Classificação'].mode().empty else "N/A"
-        else:
-            categoria_top = "N/A"
-        
-        # Finalidade mais frequente
-        if 'Finalidade' in df_filtered.columns and not df_filtered['Finalidade'].empty:
-            finalidade_top = df_filtered['Finalidade'].mode().iloc[0] if not df_filtered['Finalidade'].mode().empty else "N/A"
-        else:
-            finalidade_top = "N/A"
-        
-        # Valor máximo
-        valor_max = df_filtered['Valor'].max()
-        
-        # Criar cards
-        kpi_cards = [
-            dbc.Col([
-                create_kpi_card(
-                    title="Total Gasto",
-                    value=f"R$ {total_gasto:,.2f}",
-                    icon="fas fa-money-bill-wave",
-                    color="#4361ee",
-                    subtitle=f"{total_registros:,} registros"
-                )
-            ], md=6, lg=3, className="mb-3"),
-            
-            dbc.Col([
-                create_kpi_card(
-                    title="Valor Médio",
-                    value=f"R$ {valor_medio:,.2f}",
-                    icon="fas fa-calculator",
-                    color="#4cc9f0",
-                    subtitle=f"Mediana: R$ {valor_mediano:,.2f}"
-                )
-            ], md=6, lg=3, className="mb-3"),
-            
-            dbc.Col([
-                create_kpi_card(
-                    title="Categoria Top",
-                    value=categoria_top,
-                    icon="fas fa-tag",
-                    color="#7209b7",
-                    subtitle=f"Finalidade: {finalidade_top}"
-                )
-            ], md=6, lg=3, className="mb-3"),
-            
-            dbc.Col([
-                create_kpi_card(
-                    title="Valor Máximo",
-                    value=f"R$ {valor_max:,.2f}",
-                    icon="fas fa-chart-line",
-                    color="#f72585",
-                    subtitle="Maior solicitação"
-                )
-            ], md=6, lg=3, className="mb-3")
-        ]
-    
-    # Converter dados filtrados para JSON
-    filtered_json = df_filtered.to_json(date_format='iso', orient='split') if not df_filtered.empty else None
-    
-    return filtered_json, kpi_cards
-
-# Callback para atualizar gráficos
-@app.callback(
-    [Output('grafico-evolucao', 'figure'),
+    [Output('grafico-evolucao-gastos', 'figure'),
+     Output('grafico-empresas', 'figure'),
      Output('grafico-classificacao', 'figure'),
      Output('grafico-finalidades', 'figure'),
      Output('grafico-horas', 'figure'),
-     Output('grafico-dias-semana', 'figure'),
-     Output('grafico-boxplot', 'figure'),
-     Output('tabela-dados', 'data'),
-     Output('tabela-dados', 'columns')],
-    [Input('filtered-data', 'data')]
+     Output('tabela-detalhada', 'data'),
+     Output('table-info', 'children'),
+     Output('grafico-analise-empresa', 'figure'),
+     Output('grafico-analise-os', 'figure'),
+     Output('filtered-data-store', 'data', allow_duplicate=True)],
+    [Input('filtro-classificacao', 'value'),
+     Input('filtro-empresa', 'value'),
+     Input('filtro-finalidade', 'value'),
+     Input('filtro-status', 'value'),
+     Input('filtro-data', 'start_date'),
+     Input('filtro-data', 'end_date'),
+     Input('filtro-valor-min', 'value'),
+     Input('filtro-valor-max', 'value'),
+     Input('ordenar-por', 'value'),
+     Input('data-store', 'data')],
+    prevent_initial_call=True
 )
-def update_charts(filtered_data):
-    """Atualiza todos os gráficos com dados filtrados"""
-    if filtered_data is None:
-        return [go.Figure()] * 7
+def update_all_components(classificacao, empresa, finalidade, status, start_date, end_date, 
+                         valor_min, valor_max, ordenar_por, data_store):
+    """Atualiza todos os componentes com base nos filtros"""
     
-    # Carregar dados filtrados
-    df = pd.read_json(filtered_data, orient='split')
+    # Converter dados do store para DataFrame
+    df = pd.DataFrame(data_store)
     
     if df.empty:
         empty_fig = go.Figure()
-        empty_fig.update_layout(
-            title="Sem dados para exibir",
-            xaxis_visible=False,
-            yaxis_visible=False,
-            annotations=[dict(
-                text="Nenhum dado encontrado",
-                xref="paper", yref="paper",
-                showarrow=False,
-                font=dict(size=20)
-            )]
-        )
-        return [empty_fig] * 6 + [[], []]
+        empty_fig.add_annotation(text="Nenhum dado disponível", showarrow=False)
+        empty_data = []
+        table_info = "Nenhum registro encontrado"
+        return [empty_fig] * 5 + [empty_data, table_info, empty_fig, empty_fig, dash.no_update]
     
-    # 1. Gráfico de Evolução Diária
-    fig_evolucao = create_evolucao_chart(df)
+    # Aplicar filtros
+    df_filtrado = df.copy()
     
-    # 2. Gráfico de Classificação
-    fig_classificacao = create_classificacao_chart(df)
+    # Converter datas
+    for col in ['Criado', 'Modificado']:
+        if col in df_filtrado.columns:
+            df_filtrado[col] = pd.to_datetime(df_filtrado[col])
     
-    # 3. Gráfico de Finalidades
-    fig_finalidades = create_finalidades_chart(df)
+    # Filtro de classificação
+    if classificacao != 'Todas':
+        df_filtrado = df_filtrado[df_filtrado['Classificação'] == classificacao]
     
-    # 4. Gráfico de Horas
-    fig_horas = create_horas_chart(df)
+    # Filtro de empresa
+    if empresa != 'Todas':
+        df_filtrado = df_filtrado[df_filtrado['Empresa'] == empresa]
     
-    # 5. Gráfico de Dias da Semana
-    fig_dias_semana = create_dias_semana_chart(df)
+    # Filtro de finalidade
+    if finalidade != 'Todas':
+        df_filtrado = df_filtrado[df_filtrado['Finalidade'] == finalidade]
     
-    # 6. Box Plot
-    fig_boxplot = create_boxplot_chart(df)
+    # Filtro de status
+    if status != 'Todos':
+        df_filtrado = df_filtrado[df_filtrado['Status'] == status]
     
-    # 7. Tabela de Dados
-    tabela_data, tabela_columns = create_table_data(df)
+    # Filtro de data
+    if start_date and end_date:
+        start_date = pd.to_datetime(start_date).date()
+        end_date = pd.to_datetime(end_date).date()
+        if 'Criado' in df_filtrado.columns:
+            df_filtrado['Data_Criacao'] = pd.to_datetime(df_filtrado['Criado']).dt.date
+            df_filtrado = df_filtrado[
+                (df_filtrado['Data_Criacao'] >= start_date) & 
+                (df_filtrado['Data_Criacao'] <= end_date)
+            ]
     
-    return [
-        fig_evolucao,
-        fig_classificacao,
-        fig_finalidades,
-        fig_horas,
-        fig_dias_semana,
-        fig_boxplot,
-        tabela_data,
-        tabela_columns
-    ]
-
-# Funções para criação de gráficos
-def create_evolucao_chart(df):
-    """Cria gráfico de evolução diária"""
-    if df.empty:
-        return go.Figure()
+    # Filtro de valor
+    if valor_min is not None:
+        df_filtrado = df_filtrado[df_filtrado['Valor'] >= float(valor_min)]
     
-    # Agrupar por data
-    daily_data = df.groupby('Data_Criacao').agg({
-        'Valor': ['sum', 'count'],
-        'ID': 'nunique'
-    }).reset_index()
+    if valor_max is not None:
+        df_filtrado = df_filtrado[df_filtrado['Valor'] <= float(valor_max)]
     
-    daily_data.columns = ['Data', 'Valor_Total', 'Quantidade', 'Registros_Unicos']
+    # Ordenação
+    if ordenar_por == 'data_desc':
+        df_filtrado = df_filtrado.sort_values('Criado', ascending=False)
+    elif ordenar_por == 'data_asc':
+        df_filtrado = df_filtrado.sort_values('Criado', ascending=True)
+    elif ordenar_por == 'valor_desc':
+        df_filtrado = df_filtrado.sort_values('Valor', ascending=False)
+    elif ordenar_por == 'valor_asc':
+        df_filtrado = df_filtrado.sort_values('Valor', ascending=True)
     
-    # Calcular média móvel
-    daily_data['Media_Movel'] = daily_data['Valor_Total'].rolling(window=3, min_periods=1).mean()
-    
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-    
-    # Adicionar linha de valor total
-    fig.add_trace(
-        go.Scatter(
+    # ========================================================================
+    # 1. Gráfico de Evolução de Gastos
+    # ========================================================================
+    if not df_filtrado.empty and 'Criado' in df_filtrado.columns and 'Valor' in df_filtrado.columns:
+        df_filtrado['Data'] = pd.to_datetime(df_filtrado['Criado']).dt.date
+        daily_data = df_filtrado.groupby('Data')['Valor'].sum().reset_index()
+        
+        fig_evolucao = go.Figure()
+        fig_evolucao.add_trace(go.Scatter(
             x=daily_data['Data'],
-            y=daily_data['Valor_Total'],
+            y=daily_data['Valor'],
             mode='lines+markers',
             name='Gasto Diário',
             line=dict(color='#4361ee', width=3),
             marker=dict(size=8, color='#4361ee'),
-            hovertemplate='<b>%{x|%d/%m}</b><br>R$ %{y:,.2f}<extra></extra>'
-        ),
-        secondary_y=False
-    )
-    
-    # Adicionar linha de média móvel
-    fig.add_trace(
-        go.Scatter(
-            x=daily_data['Data'],
-            y=daily_data['Media_Movel'],
-            mode='lines',
-            name='Média Móvel (3 dias)',
-            line=dict(color='#f72585', width=2, dash='dash'),
-            hovertemplate='<b>%{x|%d/%m}</b><br>R$ %{y:,.2f}<extra></extra>'
-        ),
-        secondary_y=False
-    )
-    
-    # Adicionar barras de quantidade
-    fig.add_trace(
-        go.Bar(
-            x=daily_data['Data'],
-            y=daily_data['Quantidade'],
-            name='Quantidade',
-            marker_color='rgba(76, 201, 240, 0.5)',
-            hovertemplate='<b>%{x|%d/%m}</b><br>%{y} solicitações<extra></extra>'
-        ),
-        secondary_y=True
-    )
-    
-    # Configurar layout
-    fig.update_layout(
-        title='Evolução de Gastos Diários',
-        template='plotly_white',
-        hovermode='x unified',
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        ),
-        margin=dict(l=50, r=50, t=80, b=50),
-        height=400
-    )
-    
-    fig.update_xaxes(title_text="Data")
-    fig.update_yaxes(title_text="Valor (R$)", secondary_y=False)
-    fig.update_yaxes(title_text="Quantidade", secondary_y=True)
-    
-    return fig
-
-def create_classificacao_chart(df):
-    """Cria gráfico de pizza por classificação"""
-    if df.empty:
-        return go.Figure()
-    
-    # Agrupar por classificação
-    class_data = df.groupby('Classificação')['Valor'].sum().reset_index()
-    class_data = class_data.sort_values('Valor', ascending=False)
-    
-    fig = px.pie(
-        class_data,
-        values='Valor',
-        names='Classificação',
-        title='Distribuição por Classificação',
-        hole=0.4,
-        color_discrete_sequence=px.colors.qualitative.Set3
-    )
-    
-    fig.update_traces(
-        textposition='inside',
-        textinfo='percent+label',
-        hovertemplate='<b>%{label}</b><br>R$ %{value:,.2f}<br>%{percent}<extra></extra>',
-        marker=dict(line=dict(color='#fff', width=2))
-    )
-    
-    fig.update_layout(
-        height=400,
-        showlegend=True,
-        margin=dict(l=20, r=20, t=60, b=20),
-        legend=dict(
-            orientation="v",
-            yanchor="middle",
-            y=0.5,
-            xanchor="left",
-            x=1.05
+            fill='tozeroy',
+            fillcolor='rgba(67, 97, 238, 0.1)'
+        ))
+        
+        # Adicionar média móvel de 7 dias
+        if len(daily_data) >= 7:
+            daily_data['Media_Movel'] = daily_data['Valor'].rolling(window=7, min_periods=1).mean()
+            fig_evolucao.add_trace(go.Scatter(
+                x=daily_data['Data'],
+                y=daily_data['Media_Movel'],
+                mode='lines',
+                name='Média Móvel (7 dias)',
+                line=dict(color='#f72585', width=2, dash='dash')
+            ))
+        
+        fig_evolucao.update_layout(
+            title='Evolução de Gastos Diários',
+            xaxis_title='Data',
+            yaxis_title='Valor (R$)',
+            hovermode='x unified',
+            template='plotly_white',
+            height=400,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
         )
-    )
+    else:
+        fig_evolucao = create_empty_figure("Sem dados para o período selecionado")
     
-    return fig
-
-def create_finalidades_chart(df):
-    """Cria gráfico de barras para top finalidades"""
-    if df.empty:
-        return go.Figure()
-    
-    # Agrupar por finalidade
-    fin_data = df.groupby('Finalidade').agg({
-        'Valor': 'sum',
-        'ID': 'count'
-    }).reset_index()
-    
-    fin_data.columns = ['Finalidade', 'Valor_Total', 'Quantidade']
-    fin_data = fin_data.sort_values('Valor_Total', ascending=True).tail(15)
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=fin_data['Finalidade'],
-        x=fin_data['Valor_Total'],
-        orientation='h',
-        name='Valor Total',
-        marker_color='#4cc9f0',
-        hovertemplate='<b>%{y}</b><br>R$ %{x:,.2f}<br>%{customdata} solicitações<extra></extra>',
-        customdata=fin_data['Quantidade']
-    ))
-    
-    fig.update_layout(
-        title='Top 15 Finalidades por Valor',
-        template='plotly_white',
-        height=400,
-        margin=dict(l=20, r=20, t=60, b=20),
-        xaxis_title='Valor Total (R$)',
-        yaxis_title='Finalidade',
-        yaxis={'categoryorder': 'total ascending'}
-    )
-    
-    return fig
-
-def create_horas_chart(df):
-    """Cria gráfico de distribuição por hora"""
-    if df.empty:
-        return go.Figure()
-    
-    # Agrupar por hora
-    hour_data = df.groupby('Hora_Criacao').agg({
-        'Valor': 'sum',
-        'ID': 'count'
-    }).reset_index()
-    
-    hour_data.columns = ['Hora', 'Valor_Total', 'Quantidade']
-    
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-    
-    # Adicionar linha de valor total
-    fig.add_trace(
-        go.Scatter(
-            x=hour_data['Hora'],
-            y=hour_data['Valor_Total'],
-            mode='lines+markers',
+    # ========================================================================
+    # 2. Gráfico de Distribuição por Empresa
+    # ========================================================================
+    if not df_filtrado.empty and 'Empresa' in df_filtrado.columns and 'Valor' in df_filtrado.columns:
+        empresa_data = df_filtrado.groupby('Empresa')['Valor'].agg(['sum', 'count']).reset_index()
+        empresa_data.columns = ['Empresa', 'Valor_Total', 'Quantidade']
+        empresa_data = empresa_data.sort_values('Valor_Total', ascending=False)
+        
+        fig_empresas = go.Figure()
+        fig_empresas.add_trace(go.Bar(
+            x=empresa_data['Empresa'],
+            y=empresa_data['Valor_Total'],
             name='Valor Total',
-            line=dict(color='#7209b7', width=3),
-            marker=dict(size=8, color='#7209b7'),
-            hovertemplate='<b>%{x}:00h</b><br>R$ %{y:,.2f}<extra></extra>'
-        ),
-        secondary_y=False
-    )
-    
-    # Adicionar barras de quantidade
-    fig.add_trace(
-        go.Bar(
-            x=hour_data['Hora'],
-            y=hour_data['Quantidade'],
-            name='Quantidade',
-            marker_color='rgba(114, 9, 183, 0.3)',
-            hovertemplate='<b>%{x}:00h</b><br>%{y} solicitações<extra></extra>'
-        ),
-        secondary_y=True
-    )
-    
-    fig.update_layout(
-        title='Distribuição por Hora do Dia',
-        template='plotly_white',
-        hovermode='x unified',
-        height=400,
-        margin=dict(l=50, r=50, t=80, b=50),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        )
-    )
-    
-    fig.update_xaxes(
-        title_text="Hora do Dia",
-        tickmode='linear',
-        tick0=0,
-        dtick=1
-    )
-    
-    fig.update_yaxes(title_text="Valor Total (R$)", secondary_y=False)
-    fig.update_yaxes(title_text="Quantidade", secondary_y=True)
-    
-    return fig
-
-def create_dias_semana_chart(df):
-    """Cria gráfico de análise por dia da semana"""
-    if df.empty:
-        return go.Figure()
-    
-    # Ordem dos dias
-    dias_ordem = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']
-    
-    # Agrupar por dia da semana
-    day_data = df.groupby('Dia_Semana_PT').agg({
-        'Valor': ['sum', 'mean', 'count'],
-        'ID': 'nunique'
-    }).reset_index()
-    
-    day_data.columns = ['Dia_Semana', 'Valor_Total', 'Valor_Medio', 'Quantidade', 'Registros_Unicos']
-    
-    # Ordenar
-    day_data['Dia_Semana'] = pd.Categorical(day_data['Dia_Semana'], categories=dias_ordem, ordered=True)
-    day_data = day_data.sort_values('Dia_Semana')
-    
-    fig = make_subplots(
-        rows=2, cols=2,
-        subplot_titles=('Valor Total por Dia', 'Quantidade por Dia', 
-                       'Valor Médio por Dia', 'Eficiência por Dia'),
-        vertical_spacing=0.15,
-        horizontal_spacing=0.15
-    )
-    
-    # 1. Valor Total
-    fig.add_trace(
-        go.Bar(
-            x=day_data['Dia_Semana'],
-            y=day_data['Valor_Total'],
-            name='Valor Total',
-            marker_color='#4361ee',
-            hovertemplate='<b>%{x}</b><br>R$ %{y:,.2f}<extra></extra>'
-        ),
-        row=1, col=1
-    )
-    
-    # 2. Quantidade
-    fig.add_trace(
-        go.Bar(
-            x=day_data['Dia_Semana'],
-            y=day_data['Quantidade'],
-            name='Quantidade',
             marker_color='#4cc9f0',
-            hovertemplate='<b>%{x}</b><br>%{y} solicitações<extra></extra>'
-        ),
-        row=1, col=2
-    )
+            text=empresa_data['Valor_Total'].apply(lambda x: f'R$ {x:,.0f}'),
+            textposition='auto'
+        ))
+        
+        fig_empresas.update_layout(
+            title='Distribuição por Empresa (Valor Total)',
+            xaxis_title='Empresa',
+            yaxis_title='Valor Total (R$)',
+            template='plotly_white',
+            height=400,
+            xaxis_tickangle=-45
+        )
+    else:
+        fig_empresas = create_empty_figure("Sem dados de empresa")
     
-    # 3. Valor Médio
-    fig.add_trace(
-        go.Bar(
-            x=day_data['Dia_Semana'],
-            y=day_data['Valor_Medio'],
-            name='Valor Médio',
+    # ========================================================================
+    # 3. Gráfico de Classificação (Pizza)
+    # ========================================================================
+    if not df_filtrado.empty and 'Classificação' in df_filtrado.columns and 'Valor' in df_filtrado.columns:
+        classificacao_data = df_filtrado.groupby('Classificação')['Valor'].sum().reset_index()
+        
+        fig_classificacao = px.pie(
+            classificacao_data,
+            values='Valor',
+            names='Classificação',
+            title='Distribuição por Classificação',
+            hole=0.4,
+            color_discrete_sequence=px.colors.qualitative.Set3
+        )
+        
+        fig_classificacao.update_traces(
+            textposition='inside',
+            textinfo='percent+label',
+            hovertemplate="<b>%{label}</b><br>R$ %{value:,.2f}<br>%{percent}",
+            pull=[0.1 if i == 0 else 0 for i in range(len(classificacao_data))]
+        )
+        
+        fig_classificacao.update_layout(
+            height=400,
+            showlegend=True,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=-0.2,
+                xanchor="center",
+                x=0.5
+            )
+        )
+    else:
+        fig_classificacao = create_empty_figure("Sem dados de classificação")
+    
+    # ========================================================================
+    # 4. Gráfico de Top Finalidades
+    # ========================================================================
+    if not df_filtrado.empty and 'Finalidade' in df_filtrado.columns and 'Valor' in df_filtrado.columns:
+        finalidade_data = df_filtrado.groupby('Finalidade')['Valor'].sum().reset_index()
+        finalidade_data = finalidade_data.sort_values('Valor', ascending=True).tail(10)
+        
+        fig_finalidades = px.bar(
+            finalidade_data,
+            x='Valor',
+            y='Finalidade',
+            orientation='h',
+            title='Top 10 Finalidades por Valor',
+            color='Valor',
+            color_continuous_scale='viridis',
+            text='Valor'
+        )
+        
+        fig_finalidades.update_traces(
+            texttemplate='R$ %{x:,.0f}',
+            textposition='outside',
+            hovertemplate="<b>%{y}</b><br>R$ %{x:,.2f}<extra></extra>"
+        )
+        
+        fig_finalidades.update_layout(
+            height=400,
+            xaxis_title='Valor Total (R$)',
+            yaxis_title='Finalidade',
+            coloraxis_showscale=False,
+            yaxis={'categoryorder': 'total ascending'}
+        )
+    else:
+        fig_finalidades = create_empty_figure("Sem dados de finalidade")
+    
+    # ========================================================================
+    # 5. Gráfico de Distribuição por Hora
+    # ========================================================================
+    if not df_filtrado.empty and 'Criado' in df_filtrado.columns and 'Valor' in df_filtrado.columns:
+        df_filtrado['Hora'] = pd.to_datetime(df_filtrado['Criado']).dt.hour
+        hora_data = df_filtrado.groupby('Hora')['Valor'].agg(['sum', 'count']).reset_index()
+        hora_data.columns = ['Hora', 'Valor_Total', 'Quantidade']
+        
+        fig_horas = go.Figure()
+        
+        fig_horas.add_trace(go.Bar(
+            x=hora_data['Hora'],
+            y=hora_data['Valor_Total'],
+            name='Valor Total',
             marker_color='#7209b7',
-            hovertemplate='<b>%{x}</b><br>R$ %{y:,.2f}<extra></extra>'
-        ),
-        row=2, col=1
-    )
+            yaxis='y'
+        ))
+        
+        fig_horas.add_trace(go.Scatter(
+            x=hora_data['Hora'],
+            y=hora_data['Quantidade'],
+            name='Quantidade',
+            line=dict(color='#f72585', width=3),
+            yaxis='y2',
+            mode='lines+markers'
+        ))
+        
+        fig_horas.update_layout(
+            title='Distribuição por Hora do Dia',
+            xaxis=dict(
+                title='Hora do Dia',
+                tickmode='linear',
+                tick0=0,
+                dtick=1,
+                range=[-0.5, 23.5]
+            ),
+            yaxis=dict(
+                title='Valor Total (R$)',
+                side='left'
+            ),
+            yaxis2=dict(
+                title='Quantidade de Solicitações',
+                overlaying='y',
+                side='right'
+            ),
+            height=400,
+            hovermode='x unified',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
+        )
+    else:
+        fig_horas = create_empty_figure("Sem dados de hora")
     
-    # 4. Eficiência (Valor/Quantidade)
-    day_data['Eficiencia'] = day_data['Valor_Total'] / day_data['Quantidade']
-    fig.add_trace(
-        go.Bar(
-            x=day_data['Dia_Semana'],
-            y=day_data['Eficiencia'],
-            name='Eficiência',
-            marker_color='#f72585',
-            hovertemplate='<b>%{x}</b><br>R$ %{y:,.2f}/solicitação<extra></extra>'
-        ),
-        row=2, col=2
-    )
+    # ========================================================================
+    # 6. Tabela Detalhada
+    # ========================================================================
+    if not df_filtrado.empty:
+        # Preparar dados para tabela
+        tabela_data = df_filtrado.copy()
+        
+        # Selecionar colunas para exibir
+        display_columns = ['ID', 'Title', 'Status', 'Classificação', 'Finalidade', 
+                          'Valor', 'Empresa', 'Ordem_Servico', 'Nome Motorista', 
+                          'Solicitante', 'Criado', 'Placa']
+        
+        # Manter apenas colunas que existem
+        existing_columns = [col for col in display_columns if col in tabela_data.columns]
+        tabela_data = tabela_data[existing_columns]
+        
+        # Formatar data
+        if 'Criado' in tabela_data.columns:
+            tabela_data['Criado'] = tabela_data['Criado'].dt.strftime('%d/%m/%Y %H:%M')
+        
+        # Converter para dict
+        tabela_dict = tabela_data.to_dict('records')
+        
+        # Info da tabela
+        table_info = f"Mostrando {len(tabela_data)} de {len(df)} registros | Total filtrado: R$ {df_filtrado['Valor'].sum():,.2f}"
+    else:
+        tabela_dict = []
+        table_info = "Nenhum registro encontrado com os filtros aplicados"
     
-    fig.update_layout(
-        title='Análise por Dia da Semana',
-        template='plotly_white',
-        height=600,
-        showlegend=False,
-        margin=dict(l=50, r=50, t=100, b=50)
-    )
+    # ========================================================================
+    # 7. Gráfico de Análise por Empresa (Detalhada)
+    # ========================================================================
+    if not df_filtrado.empty and 'Empresa' in df_filtrado.columns and 'Valor' in df_filtrado.columns:
+        empresa_detailed = df_filtrado.groupby('Empresa').agg({
+            'Valor': ['sum', 'mean', 'count'],
+            'ID': 'nunique'
+        }).round(2).reset_index()
+        
+        empresa_detailed.columns = ['Empresa', 'Total', 'Média', 'Quantidade', 'Registros_Únicos']
+        empresa_detailed = empresa_detailed.sort_values('Total', ascending=False).head(10)
+        
+        fig_analise_empresa = go.Figure()
+        
+        fig_analise_empresa.add_trace(go.Bar(
+            x=empresa_detailed['Empresa'],
+            y=empresa_detailed['Total'],
+            name='Total (R$)',
+            marker_color='#4361ee',
+            yaxis='y'
+        ))
+        
+        fig_analise_empresa.add_trace(go.Scatter(
+            x=empresa_detailed['Empresa'],
+            y=empresa_detailed['Média'],
+            name='Média (R$)',
+            line=dict(color='#f72585', width=3),
+            yaxis='y2',
+            mode='lines+markers'
+        ))
+        
+        fig_analise_empresa.update_layout(
+            title='Análise Detalhada por Empresa',
+            xaxis_title='Empresa',
+            yaxis=dict(
+                title='Valor Total (R$)',
+                side='left'
+            ),
+            yaxis2=dict(
+                title='Valor Médio (R$)',
+                overlaying='y',
+                side='right'
+            ),
+            height=400,
+            hovermode='x unified',
+            xaxis_tickangle=-45
+        )
+    else:
+        fig_analise_empresa = create_empty_figure("Sem dados para análise de empresa")
     
-    # Atualizar eixos
-    for i in range(1, 3):
-        for j in range(1, 3):
-            fig.update_xaxes(title_text="Dia da Semana", row=i, col=j)
+    # ========================================================================
+    # 8. Gráfico de Análise por Ordem de Serviço
+    # ========================================================================
+    if not df_filtrado.empty and 'Ordem_Servico' in df_filtrado.columns and 'Valor' in df_filtrado.columns:
+        # Filtrar ordens de serviço válidas (não vazias ou "Não Informada")
+        os_data = df_filtrado[~df_filtrado['Ordem_Servico'].isin(['', 'Não Informada', 'nan', 'NaN'])]
+        
+        if not os_data.empty:
+            os_analysis = os_data.groupby('Ordem_Servico').agg({
+                'Valor': ['sum', 'count'],
+                'Empresa': lambda x: x.mode().iloc[0] if not x.mode().empty else 'N/A'
+            }).round(2).reset_index()
+            
+            os_analysis.columns = ['Ordem_Servico', 'Total', 'Quantidade', 'Empresa_Principal']
+            os_analysis = os_analysis.sort_values('Total', ascending=False).head(15)
+            
+            fig_analise_os = go.Figure()
+            
+            colors = ['#4361ee' if total > os_analysis['Total'].median() else '#4cc9f0' 
+                     for total in os_analysis['Total']]
+            
+            fig_analise_os.add_trace(go.Bar(
+                x=os_analysis['Ordem_Servico'],
+                y=os_analysis['Total'],
+                name='Valor Total',
+                marker_color=colors,
+                text=os_analysis['Total'].apply(lambda x: f'R$ {x:,.0f}'),
+                textposition='auto'
+            ))
+            
+            fig_analise_os.update_layout(
+                title='Top 15 Ordens de Serviço por Valor',
+                xaxis_title='Ordem de Serviço',
+                yaxis_title='Valor Total (R$)',
+                height=400,
+                xaxis_tickangle=-45
+            )
+        else:
+            fig_analise_os = create_empty_figure("Nenhuma ordem de serviço válida encontrada")
+    else:
+        fig_analise_os = create_empty_figure("Sem dados de ordem de serviço")
     
-    fig.update_yaxes(title_text="Valor (R$)", row=1, col=1)
-    fig.update_yaxes(title_text="Quantidade", row=1, col=2)
-    fig.update_yaxes(title_text="Valor Médio (R$)", row=2, col=1)
-    fig.update_yaxes(title_text="Eficiência (R$/solicitação)", row=2, col=2)
-    
-    return fig
+    return [
+        fig_evolucao, fig_empresas, fig_classificacao, fig_finalidades, fig_horas,
+        tabela_dict, table_info, fig_analise_empresa, fig_analise_os,
+        df_filtrado.to_dict('records')
+    ]
 
-def create_boxplot_chart(df):
-    """Cria box plot de valores por categoria"""
-    if df.empty:
-        return go.Figure()
-    
-    # Ordenar por mediana
-    medians = df.groupby('Classificação')['Valor'].median().sort_values(ascending=False)
-    df['Classificação'] = pd.Categorical(df['Classificação'], categories=medians.index, ordered=True)
-    
-    fig = px.box(
-        df,
-        x='Classificação',
-        y='Valor',
-        color='Classificação',
-        points='all',
-        title='Distribuição de Valores por Classificação',
-        color_discrete_sequence=px.colors.qualitative.Set3
-    )
-    
-    fig.update_layout(
-        height=400,
-        template='plotly_white',
-        margin=dict(l=50, r=50, t=80, b=100),
-        xaxis_tickangle=-45,
-        showlegend=False
-    )
-    
-    fig.update_yaxes(title_text="Valor (R$)")
-    fig.update_xaxes(title_text="Classificação")
-    
-    return fig
+# ============================================================================
+# CALLBACKS PARA REUNIÃO DE MANUTENÇÃO
+# ============================================================================
 
-def create_table_data(df):
-    """Prepara dados para tabela"""
-    if df.empty:
-        return [], []
+@app.callback(
+    [Output('grafico-manutencao-empresa', 'figure'),
+     Output('grafico-manutencao-evolucao', 'figure'),
+     Output('tabela-manutencao', 'data'),
+     Output('kpi-custo-total', 'children'),
+     Output('kpi-media-os', 'children'),
+     Output('kpi-empresa-top', 'children'),
+     Output('kpi-os-top', 'children')],
+    [Input('filtro-manutencao-tipo', 'value'),
+     Input('filtro-manutencao-empresa', 'value'),
+     Input('filtro-manutencao-data', 'start_date'),
+     Input('filtro-manutencao-data', 'end_date'),
+     Input('filtered-data-store', 'data')]
+)
+def update_manutencao_analysis(tipo_manutencao, empresa, start_date, end_date, filtered_data):
+    """Atualiza a análise de manutenção corporativa"""
     
-    # Selecionar colunas para exibir
-    display_columns = ['ID', 'Title', 'Status', 'Classificação', 'Finalidade', 
-                      'Valor', 'Nome Motorista', 'Solicitante', 'Criado', 'Gestor']
+    if filtered_data is None or len(filtered_data) == 0:
+        empty_fig = create_empty_figure("Sem dados disponíveis")
+        empty_data = []
+        kpis = ["R$ 0,00", "R$ 0,00", "N/A", "N/A"]
+        return [empty_fig, empty_fig, empty_data] + kpis
     
-    # Filtrar colunas disponíveis
-    available_columns = [col for col in display_columns if col in df.columns]
+    df = pd.DataFrame(filtered_data)
     
-    # Preparar dados
-    table_data = df[available_columns].copy()
+    # Filtrar por tipo de manutenção
+    if tipo_manutencao != 'Todas':
+        manutencao_keywords = []
+        if tipo_manutencao == 'Manutenção Corretiva':
+            manutencao_keywords = ['Manutenção Corretiva', 'corretiva', 'reparo', 'conserto']
+        elif tipo_manutencao == 'Manutenção Preventiva':
+            manutencao_keywords = ['Manutenção Preventiva', 'preventiva', 'insulfime']
+        elif tipo_manutencao == 'Borracharia':
+            manutencao_keywords = ['Borracharia', 'pneu', 'borracha']
+        elif tipo_manutencao == 'Reformas':
+            manutencao_keywords = ['Reformas', 'reforma', 'insulfilm']
+        elif tipo_manutencao == 'Lavagem':
+            manutencao_keywords = ['Lavagem', 'lavador', 'lavar']
+        
+        # Filtrar por título, classificação ou finalidade
+        mask = False
+        for keyword in manutencao_keywords:
+            mask = mask | (
+                df['Title'].str.contains(keyword, case=False, na=False) |
+                df['Classificação'].str.contains(keyword, case=False, na=False) |
+                df['Finalidade'].str.contains(keyword, case=False, na=False)
+            )
+        df = df[mask]
     
-    # Formatar valores
-    if 'Valor' in table_data.columns:
-        table_data['Valor'] = table_data['Valor'].apply(lambda x: f"R$ {x:,.2f}")
+    # Filtrar por empresa
+    if empresa != 'Todas':
+        df = df[df['Empresa'] == empresa]
     
-    if 'Criado' in table_data.columns:
-        table_data['Criado'] = table_data['Criado'].dt.strftime('%d/%m/%Y %H:%M')
+    # Filtrar por data
+    if start_date and end_date:
+        if 'Criado' in df.columns:
+            start_date = pd.to_datetime(start_date).date()
+            end_date = pd.to_datetime(end_date).date()
+            df['Data_Criacao'] = pd.to_datetime(df['Criado']).dt.date
+            df = df[(df['Data_Criacao'] >= start_date) & (df['Data_Criacao'] <= end_date)]
     
-    # Criar definições de colunas
-    columns = []
-    for col in available_columns:
-        col_def = {
-            'name': col,
-            'id': col
+    # ========================================================================
+    # 1. Gráfico de Custos de Manutenção por Empresa
+    # ========================================================================
+    if not df.empty and 'Empresa' in df.columns and 'Valor' in df.columns:
+        empresa_manutencao = df.groupby('Empresa')['Valor'].agg(['sum', 'count']).reset_index()
+        empresa_manutencao.columns = ['Empresa', 'Total', 'Quantidade']
+        empresa_manutencao = empresa_manutencao.sort_values('Total', ascending=True)
+        
+        fig_manutencao_empresa = px.bar(
+            empresa_manutencao,
+            x='Total',
+            y='Empresa',
+            orientation='h',
+            title='Custos de Manutenção por Empresa',
+            color='Total',
+            color_continuous_scale='viridis',
+            text='Total'
+        )
+        
+        fig_manutencao_empresa.update_traces(
+            texttemplate='R$ %{x:,.0f}',
+            textposition='outside'
+        )
+        
+        fig_manutencao_empresa.update_layout(
+            height=400,
+            xaxis_title='Custo Total (R$)',
+            yaxis_title='Empresa',
+            coloraxis_showscale=False
+        )
+    else:
+        fig_manutencao_empresa = create_empty_figure("Sem dados de manutenção por empresa")
+    
+    # ========================================================================
+    # 2. Gráfico de Evolução dos Custos de Manutenção
+    # ========================================================================
+    if not df.empty and 'Criado' in df.columns and 'Valor' in df.columns:
+        df['Data'] = pd.to_datetime(df['Criado']).dt.date
+        evolucao_manutencao = df.groupby('Data')['Valor'].sum().reset_index()
+        
+        fig_manutencao_evolucao = go.Figure()
+        
+        fig_manutencao_evolucao.add_trace(go.Scatter(
+            x=evolucao_manutencao['Data'],
+            y=evolucao_manutencao['Valor'],
+            mode='lines+markers',
+            name='Custo Diário',
+            line=dict(color='#f72585', width=3),
+            marker=dict(size=8),
+            fill='tozeroy',
+            fillcolor='rgba(247, 37, 133, 0.1)'
+        ))
+        
+        fig_manutencao_evolucao.update_layout(
+            title='Evolução dos Custos de Manutenção',
+            xaxis_title='Data',
+            yaxis_title='Custo (R$)',
+            height=400,
+            template='plotly_white'
+        )
+    else:
+        fig_manutencao_evolucao = create_empty_figure("Sem dados para evolução")
+    
+    # ========================================================================
+    # 3. Tabela de Manutenções
+    # ========================================================================
+    if not df.empty:
+        # Preparar dados para tabela
+        tabela_manutencao = df.copy()
+        
+        # Selecionar e renomear colunas
+        tabela_colunas = {
+            'ID': 'ID',
+            'Title': 'Title',
+            'Classificação': 'Classificação',
+            'Finalidade': 'Finalidade',
+            'Valor': 'Valor',
+            'Empresa': 'Empresa',
+            'Ordem_Servico': 'Ordem_Servico',
+            'Descrição': 'Descrição',
+            'Criado': 'Criado',
+            'Placa': 'Placa'
         }
         
-        # Formatação especial para algumas colunas
-        if col == 'Valor':
-            col_def['type'] = 'numeric'
-        elif col == 'ID':
-            col_def['type'] = 'numeric'
+        # Manter apenas colunas existentes
+        existing_cols = {k: v for k, v in tabela_colunas.items() if k in tabela_manutencao.columns}
+        tabela_manutencao = tabela_manutencao[list(existing_cols.keys())]
+        tabela_manutencao = tabela_manutencao.rename(columns=existing_cols)
         
-        columns.append(col_def)
+        # Formatar data
+        if 'Criado' in tabela_manutencao.columns:
+            tabela_manutencao['Criado'] = pd.to_datetime(tabela_manutencao['Criado']).dt.strftime('%d/%m/%Y %H:%M')
+        
+        tabela_manutencao_data = tabela_manutencao.to_dict('records')
+    else:
+        tabela_manutencao_data = []
     
-    return table_data.to_dict('records'), columns
-
-# Callbacks para exportação
-@app.callback(
-    Output('download-csv', 'data'),
-    Input('btn-export-csv', 'n_clicks'),
-    State('filtered-data', 'data'),
-    prevent_initial_call=True
-)
-def export_csv(n_clicks, filtered_data):
-    """Exporta dados como CSV"""
-    if n_clicks and filtered_data:
-        df = pd.read_json(filtered_data, orient='split')
-        return dcc.send_data_frame(df.to_csv, "dados_filtrados.csv", index=False)
-    return None
-
-@app.callback(
-    Output('download-excel', 'data'),
-    Input('btn-export-excel', 'n_clicks'),
-    State('filtered-data', 'data'),
-    prevent_initial_call=True
-)
-def export_excel(n_clicks, filtered_data):
-    """Exporta dados como Excel"""
-    if n_clicks and filtered_data:
-        df = pd.read_json(filtered_data, orient='split')
-        return dcc.send_data_frame(df.to_excel, "dados_filtrados.xlsx", index=False)
-    return None
-
-# Callback para impressão
-@app.callback(
-    Output('btn-print', 'children'),
-    Input('btn-print', 'n_clicks'),
-    prevent_initial_call=True
-)
-def print_dashboard(n_clicks):
-    """Simula impressão do dashboard"""
-    if n_clicks:
-        import time
-        return [html.I(className="fas fa-spinner fa-spin me-2"), "Imprimindo..."]
-    return [html.I(className="fas fa-print me-2"), "Imprimir"]
+    # ========================================================================
+    # 4. KPIs de Manutenção
+    # ========================================================================
+    if not df.empty:
+        # Custo Total
+        custo_total = df['Valor'].sum()
+        kpi_custo_total = f"R$ {custo_total:,.2f}"
+        
+        # Média por Ordem de Serviço
+        os_validas = df[~df['Ordem_Servico'].isin(['', 'Não Informada', 'nan', 'NaN'])]
+        if not os_validas.empty:
+            media_os = os_validas.groupby('Ordem_Servico')['Valor'].sum().mean()
+            kpi_media_os = f"R$ {media_os:,.2f}"
+        else:
+            kpi_media_os = "R$ 0,00"
+        
+        # Empresa com Mais Custos
+        if 'Empresa' in df.columns:
+            empresa_top = df.groupby('Empresa')['Valor'].sum().idxmax()
+            kpi_empresa_top = empresa_top[:15] + "..." if len(empresa_top) > 15 else empresa_top
+        else:
+            kpi_empresa_top = "N/A"
+        
+        # OS Mais Frequente
+        if 'Ordem_Servico' in df.columns and not os_validas.empty:
+            os_top = os_validas['Ordem_Servico'].mode()
+            kpi_os_top = os_top.iloc[0][:15] + "..." if len(os_top.iloc[0]) > 15 else os_top.iloc[0]
+        else:
+            kpi_os_top = "N/A"
+    else:
+        kpi_custo_total = "R$ 0,00"
+        kpi_media_os = "R$ 0,00"
+        kpi_empresa_top = "N/A"
+        kpi_os_top = "N/A"
+    
+    return [
+        fig_manutencao_empresa,
+        fig_manutencao_evolucao,
+        tabela_manutencao_data,
+        kpi_custo_total,
+        kpi_media_os,
+        kpi_empresa_top,
+        kpi_os_top
+    ]
 
 # ============================================================================
-# INICIALIZAÇÃO
+# CALLBACKS PARA EXPORTAÇÃO
 # ============================================================================
+
+@app.callback(
+    Output("download-excel", "data"),
+    [Input("btn-export-excel", "n_clicks")],
+    [State("filtered-data-store", "data")],
+    prevent_initial_call=True
+)
+def export_to_excel(n_clicks, filtered_data):
+    """Exporta dados filtrados para Excel"""
+    if n_clicks is None or filtered_data is None:
+        return dash.no_update
+    
+    df = pd.DataFrame(filtered_data)
+    
+    # Criar múltiplas planilhas
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Planilha principal
+        df.to_excel(writer, sheet_name='Dados_Filtrados', index=False)
+        
+        # Planilha de resumo por classificação
+        if 'Classificação' in df.columns and 'Valor' in df.columns:
+            resumo_class = df.groupby('Classificação').agg({
+                'Valor': ['sum', 'mean', 'count'],
+                'ID': 'nunique'
+            }).round(2)
+            resumo_class.columns = ['Total', 'Média', 'Quantidade', 'Registros_Únicos']
+            resumo_class.to_excel(writer, sheet_name='Resumo_Classificação')
+        
+        # Planilha de resumo por empresa
+        if 'Empresa' in df.columns and 'Valor' in df.columns:
+            resumo_empresa = df.groupby('Empresa').agg({
+                'Valor': ['sum', 'mean', 'count'],
+                'Ordem_Servico': lambda x: x.mode().iloc[0] if not x.mode().empty else 'N/A'
+            }).round(2)
+            resumo_empresa.columns = ['Total', 'Média', 'Quantidade', 'OS_Mais_Comum']
+            resumo_empresa.to_excel(writer, sheet_name='Resumo_Empresa')
+        
+        # Planilha de ordens de serviço
+        if 'Ordem_Servico' in df.columns:
+            os_data = df[~df['Ordem_Servico'].isin(['', 'Não Informada', 'nan', 'NaN'])]
+            if not os_data.empty:
+                resumo_os = os_data.groupby('Ordem_Servico').agg({
+                    'Valor': ['sum', 'count'],
+                    'Empresa': lambda x: x.mode().iloc[0] if not x.mode().empty else 'N/A',
+                    'Classificação': lambda x: x.mode().iloc[0] if not x.mode().empty else 'N/A'
+                }).round(2)
+                resumo_os.columns = ['Total', 'Quantidade', 'Empresa_Principal', 'Classificação_Principal']
+                resumo_os.to_excel(writer, sheet_name='Resumo_Ordens_Serviço')
+    
+    output.seek(0)
+    
+    return dcc.send_bytes(
+        output.read(),
+        filename=f"relatorio_custos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    )
+
+@app.callback(
+    Output("download-csv", "data"),
+    [Input("btn-export-csv", "n_clicks")],
+    [State("filtered-data-store", "data")],
+    prevent_initial_call=True
+)
+def export_to_csv(n_clicks, filtered_data):
+    """Exporta dados filtrados para CSV"""
+    if n_clicks is None or filtered_data is None:
+        return dash.no_update
+    
+    df = pd.DataFrame(filtered_data)
+    
+    # Converter para CSV
+    csv_string = df.to_csv(index=False, encoding='utf-8-sig')
+    
+    return dcc.send_string(
+        csv_string,
+        filename=f"dados_custos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    )
+
+@app.callback(
+    Output("download-manutencao", "data"),
+    [Input("btn-export-manutencao", "n_clicks")],
+    [State("tabela-manutencao", "data")],
+    prevent_initial_call=True
+)
+def export_manutencao_report(n_clicks, tabela_data):
+    """Exporta relatório de manutenção para Excel"""
+    if n_clicks is None or not tabela_data:
+        return dash.no_update
+    
+    df = pd.DataFrame(tabela_data)
+    
+    # Criar Excel com formatação
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Planilha de dados
+        df.to_excel(writer, sheet_name='Manutenções', index=False)
+        
+        # Adicionar planilha de resumo
+        resumo = pd.DataFrame({
+            'Métrica': ['Total de Registros', 'Custo Total', 'Custo Médio', 'Data Início', 'Data Fim'],
+            'Valor': [
+                len(df),
+                f"R$ {df['Valor'].sum():,.2f}" if 'Valor' in df.columns else 'N/A',
+                f"R$ {df['Valor'].mean():,.2f}" if 'Valor' in df.columns else 'N/A',
+                df['Criado'].min() if 'Criado' in df.columns else 'N/A',
+                df['Criado'].max() if 'Criado' in df.columns else 'N/A'
+            ]
+        })
+        resumo.to_excel(writer, sheet_name='Resumo', index=False)
+    
+    output.seek(0)
+    
+    return dcc.send_bytes(
+        output.read(),
+        filename=f"relatorio_manutencao_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    )
+
+# ============================================================================
+# CALLBACKS ADICIONAIS
+# ============================================================================
+
+@app.callback(
+    [Output('grafico-top-motoristas', 'figure'),
+     Output('grafico-motorista-empresa', 'figure'),
+     Output('info-motorista', 'children')],
+    [Input('select-motorista', 'value'),
+     Input('filtered-data-store', 'data')]
+)
+def update_motorista_analysis(motorista_selecionado, filtered_data):
+    """Atualiza análises relacionadas a motoristas"""
+    
+    if filtered_data is None or len(filtered_data) == 0:
+        empty_fig = create_empty_figure("Sem dados disponíveis")
+        return empty_fig, empty_fig, "Selecione um motorista para ver detalhes"
+    
+    df = pd.DataFrame(filtered_data)
+    
+    # ========================================================================
+    # 1. Gráfico de Top 10 Motoristas
+    # ========================================================================
+    if not df.empty and 'Nome Motorista' in df.columns and 'Valor' in df.columns:
+        top_motoristas = df.groupby('Nome Motorista')['Valor'].agg(['sum', 'count']).reset_index()
+        top_motoristas.columns = ['Motorista', 'Total', 'Quantidade']
+        top_motoristas = top_motoristas.sort_values('Total', ascending=False).head(10)
+        
+        fig_top_motoristas = go.Figure()
+        
+        fig_top_motoristas.add_trace(go.Bar(
+            x=top_motoristas['Motorista'],
+            y=top_motoristas['Total'],
+            name='Valor Total',
+            marker_color='#4361ee',
+            text=top_motoristas['Total'].apply(lambda x: f'R$ {x:,.0f}'),
+            textposition='auto'
+        ))
+        
+        fig_top_motoristas.update_layout(
+            title='Top 10 Motoristas por Valor',
+            xaxis_title='Motorista',
+            yaxis_title='Valor Total (R$)',
+            height=400,
+            xaxis_tickangle=-45
+        )
+    else:
+        fig_top_motoristas = create_empty_figure("Sem dados de motoristas")
+    
+    # ========================================================================
+    # 2. Gráfico de Distribuição por Empresa (Motoristas)
+    # ========================================================================
+    if not df.empty and 'Empresa' in df.columns and 'Nome Motorista' in df.columns:
+        motorista_empresa = df.groupby(['Empresa', 'Nome Motorista']).size().reset_index(name='Quantidade')
+        empresa_dist = motorista_empresa.groupby('Empresa')['Quantidade'].sum().reset_index()
+        
+        fig_motorista_empresa = px.pie(
+            empresa_dist,
+            values='Quantidade',
+            names='Empresa',
+            title='Distribuição de Motoristas por Empresa',
+            hole=0.3,
+            color_discrete_sequence=px.colors.qualitative.Set2
+        )
+        
+        fig_motorista_empresa.update_traces(
+            textposition='inside',
+            textinfo='percent+label'
+        )
+        
+        fig_motorista_empresa.update_layout(height=400)
+    else:
+        fig_motorista_empresa = create_empty_figure("Sem dados para distribuição")
+    
+    # ========================================================================
+    # 3. Informações Detalhadas do Motorista Selecionado
+    # ========================================================================
+    if motorista_selecionado:
+        motorista_data = df[df['Nome Motorista'] == motorista_selecionado]
+        
+        if not motorista_data.empty:
+            total_motorista = motorista_data['Valor'].sum()
+            qtd_solicitacoes = len(motorista_data)
+            primeira_solicitacao = motorista_data['Criado'].min()
+            ultima_solicitacao = motorista_data['Criado'].max()
+            empresa_principal = motorista_data['Empresa'].mode().iloc[0] if not motorista_data['Empresa'].mode().empty else 'N/A'
+            
+            # Top finalidades
+            top_finalidades = motorista_data['Finalidade'].value_counts().head(3)
+            finalidades_str = ', '.join([f"{k} ({v})" for k, v in top_finalidades.items()])
+            
+            info_card = dbc.Card([
+                dbc.CardHeader(f"📋 Informações do Motorista: {motorista_selecionado}"),
+                dbc.CardBody([
+                    dbc.Row([
+                        dbc.Col([
+                            html.H6("Total Gasto:", className="text-muted"),
+                            html.H4(f"R$ {total_motorista:,.2f}", className="text-success")
+                        ], md=3),
+                        
+                        dbc.Col([
+                            html.H6("Solicitações:", className="text-muted"),
+                            html.H4(f"{qtd_solicitacoes}", className="text-primary")
+                        ], md=3),
+                        
+                        dbc.Col([
+                            html.H6("Empresa Principal:", className="text-muted"),
+                            html.H4(empresa_principal, className="text-warning")
+                        ], md=3),
+                        
+                        dbc.Col([
+                            html.H6("Média por Solicitação:", className="text-muted"),
+                            html.H4(f"R$ {total_motorista/qtd_solicitacoes:,.2f}", className="text-info")
+                        ], md=3)
+                    ]),
+                    
+                    html.Hr(),
+                    
+                    dbc.Row([
+                        dbc.Col([
+                            html.H6("Período de Atuação:", className="text-muted"),
+                            html.P(f"{primeira_solicitacao.strftime('%d/%m/%Y')} a {ultima_solicitacao.strftime('%d/%m/%Y')}")
+                        ], md=6),
+                        
+                        dbc.Col([
+                            html.H6("Finalidades Mais Comuns:", className="text-muted"),
+                            html.P(finalidades_str)
+                        ], md=6)
+                    ])
+                ])
+            ])
+        else:
+            info_card = dbc.Alert(
+                f"Nenhum dado encontrado para o motorista {motorista_selecionado}",
+                color="warning"
+            )
+    else:
+        info_card = html.P("Selecione um motorista na lista acima para ver informações detalhadas.", 
+                          className="text-muted")
+    
+    return fig_top_motoristas, fig_motorista_empresa, info_card
+
+# ============================================================================
+# FUNÇÕES AUXILIARES
+# ============================================================================
+
+def create_empty_figure(message="Sem dados disponíveis"):
+    """Cria uma figura vazia com uma mensagem"""
+    fig = go.Figure()
+    fig.add_annotation(
+        text=message,
+        xref="paper", yref="paper",
+        x=0.5, y=0.5,
+        showarrow=False,
+        font=dict(size=16, color="gray")
+    )
+    fig.update_layout(
+        plot_bgcolor='white',
+        height=400
+    )
+    return fig
+
+# ============================================================================
+# EXECUÇÃO DA APLICAÇÃO
+# ============================================================================
+
 if __name__ == '__main__':
     print("=" * 60)
-    print("🚀 DASHBOARD DE CUSTOS DIÁRIOS - INICIANDO")
+    print("🚀 DASHBOARD DE CUSTOS DIÁRIOS")
     print("=" * 60)
-    print("\n📊 Acesse o dashboard em: http://localhost:8050")
-    print("📁 Faça upload do arquivo Excel para começar")
-    print("🔄 Pressione Ctrl+C para parar o servidor\n")
+    print("\n📊 Iniciando aplicação...")
+    print(f"📁 Dados carregados: {len(df)} registros")
+    print(f"💰 Total gasto: R$ {total_gasto:,.2f}")
+    print(f"🏢 Empresas: {empresas_unicas}")
+    print(f"🔧 Ordens de Serviço: {ordens_servico}")
+    print("\n🌐 Acesse: http://localhost:8050")
+    print("=" * 60)
     
     app.run_server(
         debug=True,
