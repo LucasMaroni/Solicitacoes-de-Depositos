@@ -83,7 +83,10 @@ def load_data(caminho_arquivo):
     for col in df.columns:
         col_lower = str(col).lower().strip()
         
-        if 'id' in col_lower or 'código' in col_lower:
+        # Mapear TODAS as colunas solicitadas
+        if col_lower == 'id':  # CORREÇÃO: verificar se é exatamente 'id'
+            col_map['ID'] = col
+        elif 'código' in col_lower or 'codigo' in col_lower:
             col_map['ID'] = col
         elif 'title' in col_lower or 'título' in col_lower:
             col_map['Title'] = col
@@ -91,9 +94,9 @@ def load_data(caminho_arquivo):
             col_map['Status'] = col
         elif 'classificação' in col_lower or 'categoria' in col_lower or 'tipo' in col_lower:
             col_map['Classificação'] = col
-        elif 'finalidade' in col_lower or 'descrição' in col_lower:
+        elif 'finalidade' in col_lower:
             col_map['Finalidade'] = col
-        elif 'descrição' in col_lower and 'Finalidade' not in col_map:
+        elif 'descrição' in col_lower:
             col_map['Descrição'] = col
         elif 'solicitante' in col_lower or 'requerente' in col_lower:
             col_map['Solicitante'] = col
@@ -101,16 +104,55 @@ def load_data(caminho_arquivo):
             col_map['Nome Motorista'] = col
         elif 'valor' in col_lower or 'custo' in col_lower or 'preço' in col_lower:
             col_map['Valor'] = col
-        elif 'criado' in col_lower or 'data' in col_lower or 'criação' in col_lower:
-            col_map['Criado'] = col
-        elif 'cpf' in col_lower:
+        elif 'cpf' in col_lower and 'motorista' in col_lower:
             col_map['CPF Motorista'] = col
-        elif 'conta' in col_lower or 'banc' in col_lower:
-            col_map['Conta Bancaria'] = col
+        elif 'conta' in col_lower and 'bancaria' in col_lower:
+            col_map['Conta Bancaria AG/CC/PIX'] = col
         elif 'gestor' in col_lower or 'responsável' in col_lower:
             col_map['Gestor'] = col
-        elif 'placa' in col_lower:
-            col_map['Placa'] = col
+        elif 'ordem' in col_lower and 'serviço' in col_lower or 'os' in col_lower:
+            col_map['Ordem de Serviço'] = col
+        elif 'criado' in col_lower or 'data' in col_lower or 'criação' in col_lower:
+            col_map['Criado'] = col
+        elif 'banco' in col_lower:
+            col_map['Banco'] = col
+        elif 'cpf' in col_lower and 'favorecido' in col_lower:
+            col_map['CPF favorecido'] = col
+        elif 'modificado' in col_lower:
+            col_map['Modificado'] = col
+        elif 'modificado por' in col_lower:
+            col_map['Modificado por'] = col
+        elif 'placa' in col_lower and ('cavalo' in col_lower or 'carreta' in col_lower):
+            col_map['Placa Cavalo/Carreta'] = col
+        elif 'empresa' in col_lower:
+            col_map['Empresa'] = col
+        elif 'responsável' in col_lower and 'deposito' in col_lower:
+            col_map['Responsável Deposito'] = col
+        elif 'agencia' in col_lower or 'agência' in col_lower:
+            col_map['Agencia'] = col
+        elif ('conta' in col_lower and 'corrente' in col_lower) or 'poupança' in col_lower:
+            col_map['Conta corrente / poupança'] = col
+        elif 'nome' in col_lower and 'favorecido' in col_lower:
+            col_map['Nome Favorecido'] = col
+    
+    # Se ID não foi mapeado, verificar se há coluna 'ID' (case sensitive)
+    if 'ID' not in col_map:
+        for col in df.columns:
+            if str(col).strip() == 'ID':  # Verificação exata
+                col_map['ID'] = col
+                break
+    
+    # Se ainda não encontrou ID, usar a primeira coluna que tem dados numéricos/alfanuméricos
+    if 'ID' not in col_map:
+        for col in df.columns:
+            # Verificar se a coluna parece ser um ID (valores únicos, numéricos ou alfanuméricos)
+            col_data = df[col].dropna()
+            if not col_data.empty:
+                # Verificar se os valores parecem ser IDs
+                sample = col_data.head(10).astype(str).str.strip()
+                if sample.str.match(r'^\d+$').all() or sample.str.match(r'^[A-Za-z0-9_-]+$').all():
+                    col_map['ID'] = col
+                    break
     
     # Se não encontrou por nome, usar mapeamento por posição como fallback
     for i, col in enumerate(df.columns):
@@ -134,77 +176,62 @@ def load_data(caminho_arquivo):
             col_map['Valor'] = col
         elif i == 9 and 'CPF Motorista' not in col_map:
             col_map['CPF Motorista'] = col
-        elif i == 10 and 'Conta Bancaria' not in col_map:
-            col_map['Conta Bancaria'] = col
+        elif i == 10 and 'Conta Bancaria AG/CC/PIX' not in col_map:
+            col_map['Conta Bancaria AG/CC/PIX'] = col
         elif i == 11 and 'Gestor' not in col_map:
             col_map['Gestor'] = col
-        elif i == 14 and 'Criado' not in col_map:
+        elif i == 12 and 'Ordem de Serviço' not in col_map:
+            col_map['Ordem de Serviço'] = col
+        elif i == 13 and 'Banco' not in col_map:
+            col_map['Banco'] = col
+        elif i == 14 and 'CPF favorecido' not in col_map:
+            col_map['CPF favorecido'] = col
+        elif i == 15 and 'Criado' not in col_map:
             col_map['Criado'] = col
-        elif i == 22 and 'Placa' not in col_map:
-            col_map['Placa'] = col
+        elif i == 16 and 'Modificado' not in col_map:
+            col_map['Modificado'] = col
+        elif i == 17 and 'Modificado por' not in col_map:
+            col_map['Modificado por'] = col
+        elif i == 18 and 'Placa Cavalo/Carreta' not in col_map:
+            col_map['Placa Cavalo/Carreta'] = col
+        elif i == 19 and 'Empresa' not in col_map:
+            col_map['Empresa'] = col
+        elif i == 20 and 'Responsável Deposito' not in col_map:
+            col_map['Responsável Deposito'] = col
+        elif i == 21 and 'Agencia' not in col_map:
+            col_map['Agencia'] = col
+        elif i == 22 and 'Conta corrente / poupança' not in col_map:
+            col_map['Conta corrente / poupança'] = col
+        elif i == 23 and 'Nome Favorecido' not in col_map:
+            col_map['Nome Favorecido'] = col
     
     # Criar as colunas no novo dataframe
     for target_col, source_col in col_map.items():
         novo_df[target_col] = df[source_col]
     
-    # Verificar colunas obrigatórias e criar se não existirem
-    if 'ID' not in novo_df.columns:
-        novo_df['ID'] = range(1, len(df) + 1)
+    # Verificar e criar colunas obrigatórias se não existirem
+    colunas_obrigatorias = [
+        'ID', 'Title', 'Status', 'Classificação', 'Finalidade', 
+        'Descrição', 'Solicitante', 'Nome Motorista', 'Valor',
+        'CPF Motorista', 'Conta Bancaria AG/CC/PIX', 'Gestor',
+        'Ordem de Serviço', 'Criado', 'Banco', 'CPF favorecido',
+        'Modificado', 'Modificado por', 'Placa Cavalo/Carreta',
+        'Empresa', 'Responsável Deposito', 'Agencia',
+        'Conta corrente / poupança', 'Nome Favorecido'
+    ]
     
-    if 'Status' not in novo_df.columns:
-        novo_df['Status'] = 'Pago'
+    for coluna in colunas_obrigatorias:
+        if coluna not in novo_df.columns:
+            novo_df[coluna] = None
     
-    if 'Classificação' not in novo_df.columns:
-        novo_df['Classificação'] = 'Despesa de veículo'
-    
-    # CORREÇÃO: Garantir que 'Finalidade' seja distinta de 'Title'
-    if 'Finalidade' not in novo_df.columns:
-        if 'Descrição' in novo_df.columns:
-            novo_df['Finalidade'] = novo_df['Descrição']
-        elif 'Title' in novo_df.columns:
-            # Usar Title como fallback, mas tentar extrair finalidade
-            novo_df['Finalidade'] = novo_df['Title'].apply(lambda x: str(x)[:100] if pd.notna(x) else 'Outros')
+    # Garantir que a coluna ID tenha valores
+    if 'ID' in novo_df.columns:
+        # Se ID for None ou vazio, usar índice
+        if novo_df['ID'].isna().all() or (novo_df['ID'].astype(str).str.strip() == '').all():
+            novo_df['ID'] = [f"ID_{i+1}" for i in range(len(novo_df))]
         else:
-            novo_df['Finalidade'] = 'Outros'
-    
-    # Se Finalidade for igual a Title, tentar usar outra coluna
-    if 'Finalidade' in novo_df.columns and 'Title' in novo_df.columns:
-        # Verificar se as colunas são idênticas
-        if novo_df['Finalidade'].equals(novo_df['Title']):
-            # Se for igual, usar Descrição se disponível
-            if 'Descrição' in novo_df.columns:
-                novo_df['Finalidade'] = novo_df['Descrição']
-            else:
-                # Criar uma finalidade baseada na classificação
-                if 'Classificação' in novo_df.columns:
-                    novo_df['Finalidade'] = novo_df['Classificação']
-    
-    if 'Solicitante' not in novo_df.columns:
-        novo_df['Solicitante'] = 'Não informado'
-    
-    if 'Gestor' not in novo_df.columns:
-        # Lista de gestores padrão
-        gestores_padrao = ["Wesley Duarte Assumpção", "Alex de França Silva", "José Wítalo", "José Marcos"]
-        # Atribuir gestor com base no solicitante ou usar padrão
-        if 'Solicitante' in novo_df.columns:
-            # Mapear solicitantes para gestores
-            def atribuir_gestor(solicitante):
-                solicitante_str = str(solicitante).lower()
-                if 'wesley' in solicitante_str:
-                    return "Wesley Duarte Assumpção"
-                elif 'alex' in solicitante_str:
-                    return "Alex de França Silva"
-                elif 'josé wítalo' in solicitante_str or 'jose witalo' in solicitante_str:
-                    return "José Wítalo"
-                elif 'josé marcos' in solicitante_str or 'jose marcos' in solicitante_str:
-                    return "José Marcos"
-                else:
-                    # Distribuir aleatoriamente entre os gestores padrão
-                    return np.random.choice(gestores_padrao)
-            
-            novo_df['Gestor'] = novo_df['Solicitante'].apply(atribuir_gestor)
-        else:
-            novo_df['Gestor'] = 'Gestor não especificado'
+            # Garantir que ID seja string
+            novo_df['ID'] = novo_df['ID'].astype(str).fillna('')
     
     # Converter coluna de VALOR para numérico
     if 'Valor' in novo_df.columns:
@@ -264,55 +291,48 @@ def load_data(caminho_arquivo):
                 return 0.0
         
         novo_df['Valor'] = novo_df['Valor'].apply(converter_valor)
-    else:
-        novo_df['Valor'] = 0.0
     
-    # Converter coluna de DATA
-    if 'Criado' in novo_df.columns:
-        def converter_data(data_str):
-            if pd.isna(data_str):
-                return pd.NaT
-            
-            # Se já for datetime
-            if isinstance(data_str, (datetime, pd.Timestamp)):
-                return pd.to_datetime(data_str)
-            
-            data_str = str(data_str).strip()
-            
-            # Tentar formatos comuns
-            formatos = [
-                '%d/%m/%Y %H:%M:%S',
-                '%d/%m/%Y %H:%M',
-                '%d/%m/%Y',
-                '%Y-%m-%d %H:%M:%S',
-                '%Y-%m-%d',
-                '%m/%d/%Y %H:%M:%S',
-                '%m/%d/%Y'
-            ]
-            
-            for formato in formatos:
+    # Converter colunas de DATA
+    colunas_data = ['Criado', 'Modificado']
+    for col_data in colunas_data:
+        if col_data in novo_df.columns:
+            def converter_data(data_str, col_nome=col_data):
+                if pd.isna(data_str):
+                    return pd.NaT
+                
+                # Se já for datetime
+                if isinstance(data_str, (datetime, pd.Timestamp)):
+                    return pd.to_datetime(data_str)
+                
+                data_str = str(data_str).strip()
+                
+                # Tentar formatos comuns
+                formatos = [
+                    '%d/%m/%Y %H:%M:%S',
+                    '%d/%m/%Y %H:%M',
+                    '%d/%m/%Y',
+                    '%Y-%m-%d %H:%M:%S',
+                    '%Y-%m-%d',
+                    '%m/%d/%Y %H:%M:%S',
+                    '%m/%d/%Y'
+                ]
+                
+                for formato in formatos:
+                    try:
+                        return pd.to_datetime(data_str, format=formato)
+                    except:
+                        continue
+                
+                # Tentar parsing automático
                 try:
-                    return pd.to_datetime(data_str, format=formato)
+                    return pd.to_datetime(data_str, errors='coerce')
                 except:
-                    continue
+                    return pd.NaT
             
-            # Tentar parsing automático
-            try:
-                return pd.to_datetime(data_str, errors='coerce')
-            except:
-                return pd.NaT
-        
-        novo_df['Criado'] = novo_df['Criado'].apply(converter_data)
-        
-        # Preencher datas faltantes com data mais recente
-        if novo_df['Criado'].isna().any():
-            # Usar datas sequenciais baseadas no índice
-            datas_base = pd.date_range(start='2026-01-01', periods=len(novo_df), freq='D')
-            for i in range(len(novo_df)):
-                if pd.isna(novo_df.loc[i, 'Criado']):
-                    novo_df.loc[i, 'Criado'] = datas_base[i]
-    else:
-        # Criar datas fictícias
+            novo_df[col_data] = novo_df[col_data].apply(converter_data)
+    
+    # Se Criado não existe ou está vazio, criar datas fictícias
+    if 'Criado' not in novo_df.columns or novo_df['Criado'].isna().all():
         novo_df['Criado'] = pd.date_range(start='2026-01-01', periods=len(novo_df), freq='D')
     
     # Criar colunas Ano e Mês
@@ -702,41 +722,44 @@ if menu == "Dashboard Geral":
     else:
         st.info("ℹ️ Não há dados para mostrar o gráfico por classificação.")
 
-    # Tabela de dados com TODAS as colunas
+    # Tabela de dados com TODAS as colunas solicitadas
     st.markdown("### 📋 Tabela de Dados Completa")
     if not df_filtrado.empty:
-        # Criar uma cópia para exibição
-        df_display = df_filtrado.copy()
-        
-        # Formatar a coluna Valor no formato brasileiro
-        if 'Valor' in df_display.columns:
-            df_display['Valor_Formatado'] = df_display['Valor'].apply(formatar_brasileiro)
-        
-        # Formatar a coluna Criado
-        if 'Criado' in df_display.columns:
-            df_display['Criado'] = df_display['Criado'].dt.strftime('%d/%m/%Y %H:%M')
-        
-        # Selecionar todas as colunas para exibição
-        colunas_para_exibir = [
-            'ID', 'Title', 'Status', 'Classificação', 'Finalidade', 
-            'Descrição', 'Solicitante', 'Nome Motorista', 'Valor_Formatado',
-            'CPF Motorista', 'Conta Bancaria', 'Gestor', 'Placa', 'Criado',
+        # Definir a ordem das colunas conforme solicitado
+        colunas_ordem = [
+            'ID', 'Title', 'Status', 'Classificação', 'Finalidade',
+            'Descrição', 'Solicitante', 'Nome Motorista', 'Valor',
+            'CPF Motorista', 'Conta Bancaria AG/CC/PIX', 'Gestor',
+            'Ordem de Serviço', 'Criado', 'Banco', 'CPF favorecido',
+            'Modificado', 'Modificado por', 'Placa Cavalo/Carreta',
+            'Empresa', 'Responsável Deposito', 'Agencia',
+            'Conta corrente / poupança', 'Nome Favorecido',
             'Ano', 'Mes', 'Dia'
         ]
         
-        # Filtrar apenas colunas que existem
-        colunas_existentes = [col for col in colunas_para_exibir if col in df_display.columns]
+        # Filtrar apenas as colunas que existem no DataFrame
+        colunas_existentes = [col for col in colunas_ordem if col in df_filtrado.columns]
         
-        # Renomear colunas para melhor legibilidade
-        df_display = df_display[colunas_existentes].copy()
-        df_display = df_display.rename(columns={
-            'Valor_Formatado': 'Valor (R$)',
-            'CPF Motorista': 'CPF',
-            'Conta Bancaria': 'Conta Bancária',
-            'Nome Motorista': 'Motorista'
-        })
+        # Criar uma cópia para exibição
+        df_display = df_filtrado[colunas_existentes].copy()
         
-        # Mostrar tabela com rolagem
+        # Formatar a coluna Valor para exibição
+        if 'Valor' in df_display.columns:
+            df_display['Valor (R$)'] = df_display['Valor'].apply(formatar_brasileiro)
+            # Mover a coluna formatada para depois da coluna Valor original
+            cols = df_display.columns.tolist()
+            valor_idx = cols.index('Valor')
+            cols.insert(valor_idx + 1, 'Valor (R$)')
+            cols.remove('Valor (R$)')
+            df_display = df_display[cols]
+        
+        # Formatar as colunas de data
+        colunas_data = ['Criado', 'Modificado']
+        for col_data in colunas_data:
+            if col_data in df_display.columns:
+                df_display[col_data] = df_display[col_data].dt.strftime('%d/%m/%Y %H:%M')
+        
+        # Mostrar a tabela
         st.dataframe(df_display, use_container_width=True, height=400)
         
         # Botão para baixar dados
@@ -890,40 +913,44 @@ elif menu == "Análise Detalhada":
 
             st.plotly_chart(fig_solicitante, use_container_width=True)
 
-    # Tabela de dados com TODAS as colunas
+    # Tabela de dados com TODAS as colunas solicitadas
     st.markdown("### 📋 Tabela de Solicitações Completa")
     if not df_filtrado.empty:
-        # Criar uma cópia para exibição
-        df_display = df_filtrado.copy()
-        
-        # Formatar a coluna Criado
-        if 'Criado' in df_display.columns:
-            df_display['Criado'] = df_display['Criado'].dt.strftime('%d/%m/%Y %H:%M')
-        
-        # Formatar a coluna Valor no formato brasileiro
-        if 'Valor' in df_display.columns:
-            df_display['Valor_Formatado'] = df_display['Valor'].apply(formatar_brasileiro)
-        
-        # Selecionar todas as colunas para exibição
-        colunas_para_exibir = [
-            'ID', 'Title', 'Status', 'Classificação', 'Finalidade', 
-            'Descrição', 'Solicitante', 'Nome Motorista', 'Valor_Formatado',
-            'CPF Motorista', 'Conta Bancaria', 'Gestor', 'Placa', 'Criado',
+        # Definir a ordem das colunas conforme solicitado
+        colunas_ordem = [
+            'ID', 'Title', 'Status', 'Classificação', 'Finalidade',
+            'Descrição', 'Solicitante', 'Nome Motorista', 'Valor',
+            'CPF Motorista', 'Conta Bancaria AG/CC/PIX', 'Gestor',
+            'Ordem de Serviço', 'Criado', 'Banco', 'CPF favorecido',
+            'Modificado', 'Modificado por', 'Placa Cavalo/Carreta',
+            'Empresa', 'Responsável Deposito', 'Agencia',
+            'Conta corrente / poupança', 'Nome Favorecido',
             'Ano', 'Mes', 'Dia'
         ]
         
-        # Filtrar apenas colunas que existem
-        colunas_existentes = [col for col in colunas_para_exibir if col in df_display.columns]
+        # Filtrar apenas as colunas que existem no DataFrame
+        colunas_existentes = [col for col in colunas_ordem if col in df_filtrado.columns]
         
-        # Renomear colunas para melhor legibilidade
-        df_display = df_display[colunas_existentes].copy()
-        df_display = df_display.rename(columns={
-            'Valor_Formatado': 'Valor (R$)',
-            'CPF Motorista': 'CPF',
-            'Conta Bancaria': 'Conta Bancária',
-            'Nome Motorista': 'Motorista'
-        })
+        # Criar uma cópia para exibição
+        df_display = df_filtrado[colunas_existentes].copy()
         
+        # Formatar a coluna Valor para exibição
+        if 'Valor' in df_display.columns:
+            df_display['Valor (R$)'] = df_display['Valor'].apply(formatar_brasileiro)
+            # Mover a coluna formatada para depois da coluna Valor original
+            cols = df_display.columns.tolist()
+            valor_idx = cols.index('Valor')
+            cols.insert(valor_idx + 1, 'Valor (R$)')
+            cols.remove('Valor (R$)')
+            df_display = df_display[cols]
+        
+        # Formatar as colunas de data
+        colunas_data = ['Criado', 'Modificado']
+        for col_data in colunas_data:
+            if col_data in df_display.columns:
+                df_display[col_data] = df_display[col_data].dt.strftime('%d/%m/%Y %H:%M')
+        
+        # Mostrar a tabela
         st.dataframe(df_display, use_container_width=True, height=400)
         
         # Botão para download (mantém valores numéricos no Excel)
@@ -1090,40 +1117,44 @@ elif menu == "Reunião Manutenção Corporativa":
     else:
         st.warning("⚠️ Não há dados disponíveis para fazer projeções.")
 
-    # Tabela detalhada com TODAS as colunas
+    # Tabela detalhada com TODAS as colunas solicitadas
     st.markdown("### 📋 Tabela Detalhada Completa")
     if not df_rm.empty:
-        # Criar uma cópia para exibição
-        df_display = df_rm.copy()
-        
-        # Formatar a coluna Criado
-        if 'Criado' in df_display.columns:
-            df_display['Criado'] = df_display['Criado'].dt.strftime('%d/%m/%Y %H:%M')
-        
-        # Formatar a coluna Valor no formato brasileiro
-        if 'Valor' in df_display.columns:
-            df_display['Valor_Formatado'] = df_display['Valor'].apply(formatar_brasileiro)
-        
-        # Selecionar todas as colunas para exibição
-        colunas_para_exibir = [
-            'ID', 'Title', 'Status', 'Classificação', 'Finalidade', 
-            'Descrição', 'Solicitante', 'Nome Motorista', 'Valor_Formatado',
-            'CPF Motorista', 'Conta Bancaria', 'Gestor', 'Placa', 'Criado',
+        # Definir a ordem das colunas conforme solicitado
+        colunas_ordem = [
+            'ID', 'Title', 'Status', 'Classificação', 'Finalidade',
+            'Descrição', 'Solicitante', 'Nome Motorista', 'Valor',
+            'CPF Motorista', 'Conta Bancaria AG/CC/PIX', 'Gestor',
+            'Ordem de Serviço', 'Criado', 'Banco', 'CPF favorecido',
+            'Modificado', 'Modificado por', 'Placa Cavalo/Carreta',
+            'Empresa', 'Responsável Deposito', 'Agencia',
+            'Conta corrente / poupança', 'Nome Favorecido',
             'Ano', 'Mes', 'Dia'
         ]
         
-        # Filtrar apenas colunas que existem
-        colunas_existentes = [col for col in colunas_para_exibir if col in df_display.columns]
+        # Filtrar apenas as colunas que existem no DataFrame
+        colunas_existentes = [col for col in colunas_ordem if col in df_rm.columns]
         
-        # Renomear colunas para melhor legibilidade
-        df_display = df_display[colunas_existentes].copy()
-        df_display = df_display.rename(columns={
-            'Valor_Formatado': 'Valor (R$)',
-            'CPF Motorista': 'CPF',
-            'Conta Bancaria': 'Conta Bancária',
-            'Nome Motorista': 'Motorista'
-        })
+        # Criar uma cópia para exibição
+        df_display = df_rm[colunas_existentes].copy()
         
+        # Formatar a coluna Valor para exibição
+        if 'Valor' in df_display.columns:
+            df_display['Valor (R$)'] = df_display['Valor'].apply(formatar_brasileiro)
+            # Mover a coluna formatada para depois da coluna Valor original
+            cols = df_display.columns.tolist()
+            valor_idx = cols.index('Valor')
+            cols.insert(valor_idx + 1, 'Valor (R$)')
+            cols.remove('Valor (R$)')
+            df_display = df_display[cols]
+        
+        # Formatar as colunas de data
+        colunas_data = ['Criado', 'Modificado']
+        for col_data in colunas_data:
+            if col_data in df_display.columns:
+                df_display[col_data] = df_display[col_data].dt.strftime('%d/%m/%Y %H:%M')
+        
+        # Mostrar a tabela
         st.dataframe(df_display, use_container_width=True, height=400)
         
         # Botão para download
