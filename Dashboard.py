@@ -4,360 +4,21 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import locale
 import io
-import numpy as np
-import re
-
-# Configurar locale para português brasileiro
-try:
-    locale.setlocale(locale.LC_ALL, 'pt_BR.UTF-8')
-except:
-    try:
-        locale.setlocale(locale.LC_ALL, 'Portuguese_Brazil.1252')
-    except:
-        pass
 
 st.set_page_config(page_title="Dashboard de Custos", layout="wide")
 
-# Função para formatar números no formato brasileiro
-def formatar_brasileiro(valor, decimais=2):
-    """
-    Formata um número no formato brasileiro: 1.234,56
-    """
-    if pd.isna(valor):
-        return "0,00"
-    
-    try:
-        # Se já for string no formato brasileiro, converter para float primeiro
-        if isinstance(valor, str):
-            # Remover caracteres não numéricos exceto vírgula, ponto e sinal negativo
-            valor_limpo = re.sub(r'[^\d,\-\.]', '', valor)
-            
-            # Se tem vírgula e ponto, assumir que vírgula é decimal
-            if ',' in valor_limpo and '.' in valor_limpo:
-                # Remover pontos de milhar
-                valor_limpo = valor_limpo.replace('.', '')
-                # Substituir vírgula por ponto
-                valor_limpo = valor_limpo.replace(',', '.')
-            elif ',' in valor_limpo:
-                # Se só tem vírgula, verificar se é decimal ou milhar
-                partes = valor_limpo.split(',')
-                if len(partes[-1]) == 2 or len(partes[-1]) == 3:  # Provavelmente decimal
-                    valor_limpo = valor_limpo.replace('.', '').replace(',', '.')
-                else:
-                    # Pode ser milhar europeu
-                    valor_limpo = valor_limpo.replace(',', '')
-            
-            valor_float = float(valor_limpo)
-        else:
-            valor_float = float(valor)
-        
-        # Formatar com separador de milhar e vírgula decimal
-        format_str = f"{{:,.{decimais}f}}"
-        formatted = format_str.format(valor_float)
-        # Substituir ponto por vírgula e vírgula por ponto
-        return formatted.replace(",", "X").replace(".", ",").replace("X", ".")
-    except Exception as e:
-        # Fallback simples
-        try:
-            return f"{float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        except:
-            return str(valor)
-
 @st.cache_data
 def load_data(caminho_arquivo):
-    try:
-        # Ler o arquivo Excel mantendo todos os dados
-        df = pd.read_excel(caminho_arquivo, dtype=str)  # Ler tudo como string inicialmente
-        
-    except Exception as e:
-        st.error(f"Erro ao ler o arquivo Excel: {e}")
-        return pd.DataFrame()
-    
-    # Criar novo DataFrame com mapeamento mais flexível
-    novo_df = pd.DataFrame()
-    
-    # Primeiro, tentar identificar colunas por nome
-    col_map = {}
-    
-    # Mapear nomes de colunas possíveis (case insensitive)
-    for col in df.columns:
-        col_lower = str(col).lower().strip()
-        
-        # Mapear TODAS as colunas solicitadas
-        if col_lower == 'id':  # CORREÇÃO: verificar se é exatamente 'id'
-            col_map['ID'] = col
-        elif 'código' in col_lower or 'codigo' in col_lower:
-            col_map['ID'] = col
-        elif 'title' in col_lower or 'título' in col_lower:
-            col_map['Title'] = col
-        elif 'status' in col_lower or 'situação' in col_lower:
-            col_map['Status'] = col
-        elif 'classificação' in col_lower or 'categoria' in col_lower or 'tipo' in col_lower:
-            col_map['Classificação'] = col
-        elif 'finalidade' in col_lower:
-            col_map['Finalidade'] = col
-        elif 'descrição' in col_lower:
-            col_map['Descrição'] = col
-        elif 'solicitante' in col_lower or 'requerente' in col_lower:
-            col_map['Solicitante'] = col
-        elif 'motorista' in col_lower and 'nome' in col_lower:
-            col_map['Nome Motorista'] = col
-        elif 'valor' in col_lower or 'custo' in col_lower or 'preço' in col_lower:
-            col_map['Valor'] = col
-        elif 'cpf' in col_lower and 'motorista' in col_lower:
-            col_map['CPF Motorista'] = col
-        elif 'conta' in col_lower and 'bancaria' in col_lower:
-            col_map['Conta Bancaria AG/CC/PIX'] = col
-        elif 'gestor' in col_lower or 'responsável' in col_lower:
-            col_map['Gestor'] = col
-        elif 'ordem' in col_lower and 'serviço' in col_lower or 'os' in col_lower:
-            col_map['Ordem de Serviço'] = col
-        elif 'criado' in col_lower or 'data' in col_lower or 'criação' in col_lower:
-            col_map['Criado'] = col
-        elif 'banco' in col_lower:
-            col_map['Banco'] = col
-        elif 'cpf' in col_lower and 'favorecido' in col_lower:
-            col_map['CPF favorecido'] = col
-        elif 'modificado' in col_lower:
-            col_map['Modificado'] = col
-        elif 'modificado por' in col_lower:
-            col_map['Modificado por'] = col
-        elif 'placa' in col_lower and ('cavalo' in col_lower or 'carreta' in col_lower):
-            col_map['Placa Cavalo/Carreta'] = col
-        elif 'empresa' in col_lower:
-            col_map['Empresa'] = col
-        elif 'responsável' in col_lower and 'deposito' in col_lower:
-            col_map['Responsável Deposito'] = col
-        elif 'agencia' in col_lower or 'agência' in col_lower:
-            col_map['Agencia'] = col
-        elif ('conta' in col_lower and 'corrente' in col_lower) or 'poupança' in col_lower:
-            col_map['Conta corrente / poupança'] = col
-        elif 'nome' in col_lower and 'favorecido' in col_lower:
-            col_map['Nome Favorecido'] = col
-    
-    # Se ID não foi mapeado, verificar se há coluna 'ID' (case sensitive)
-    if 'ID' not in col_map:
-        for col in df.columns:
-            if str(col).strip() == 'ID':  # Verificação exata
-                col_map['ID'] = col
-                break
-    
-    # Se ainda não encontrou ID, usar a primeira coluna que tem dados numéricos/alfanuméricos
-    if 'ID' not in col_map:
-        for col in df.columns:
-            # Verificar se a coluna parece ser um ID (valores únicos, numéricos ou alfanuméricos)
-            col_data = df[col].dropna()
-            if not col_data.empty:
-                # Verificar se os valores parecem ser IDs
-                sample = col_data.head(10).astype(str).str.strip()
-                if sample.str.match(r'^\d+$').all() or sample.str.match(r'^[A-Za-z0-9_-]+$').all():
-                    col_map['ID'] = col
-                    break
-    
-    # Se não encontrou por nome, usar mapeamento por posição como fallback
-    for i, col in enumerate(df.columns):
-        if i == 0 and 'ID' not in col_map:
-            col_map['ID'] = col
-        elif i == 1 and 'Title' not in col_map:
-            col_map['Title'] = col
-        elif i == 2 and 'Status' not in col_map:
-            col_map['Status'] = col
-        elif i == 3 and 'Classificação' not in col_map:
-            col_map['Classificação'] = col
-        elif i == 4 and 'Finalidade' not in col_map:
-            col_map['Finalidade'] = col
-        elif i == 5 and 'Descrição' not in col_map:
-            col_map['Descrição'] = col
-        elif i == 6 and 'Solicitante' not in col_map:
-            col_map['Solicitante'] = col
-        elif i == 7 and 'Nome Motorista' not in col_map:
-            col_map['Nome Motorista'] = col
-        elif i == 8 and 'Valor' not in col_map:
-            col_map['Valor'] = col
-        elif i == 9 and 'CPF Motorista' not in col_map:
-            col_map['CPF Motorista'] = col
-        elif i == 10 and 'Conta Bancaria AG/CC/PIX' not in col_map:
-            col_map['Conta Bancaria AG/CC/PIX'] = col
-        elif i == 11 and 'Gestor' not in col_map:
-            col_map['Gestor'] = col
-        elif i == 12 and 'Ordem de Serviço' not in col_map:
-            col_map['Ordem de Serviço'] = col
-        elif i == 13 and 'Banco' not in col_map:
-            col_map['Banco'] = col
-        elif i == 14 and 'CPF favorecido' not in col_map:
-            col_map['CPF favorecido'] = col
-        elif i == 15 and 'Criado' not in col_map:
-            col_map['Criado'] = col
-        elif i == 16 and 'Modificado' not in col_map:
-            col_map['Modificado'] = col
-        elif i == 17 and 'Modificado por' not in col_map:
-            col_map['Modificado por'] = col
-        elif i == 18 and 'Placa Cavalo/Carreta' not in col_map:
-            col_map['Placa Cavalo/Carreta'] = col
-        elif i == 19 and 'Empresa' not in col_map:
-            col_map['Empresa'] = col
-        elif i == 20 and 'Responsável Deposito' not in col_map:
-            col_map['Responsável Deposito'] = col
-        elif i == 21 and 'Agencia' not in col_map:
-            col_map['Agencia'] = col
-        elif i == 22 and 'Conta corrente / poupança' not in col_map:
-            col_map['Conta corrente / poupança'] = col
-        elif i == 23 and 'Nome Favorecido' not in col_map:
-            col_map['Nome Favorecido'] = col
-    
-    # Criar as colunas no novo dataframe
-    for target_col, source_col in col_map.items():
-        novo_df[target_col] = df[source_col]
-    
-    # Verificar e criar colunas obrigatórias se não existirem
-    colunas_obrigatorias = [
-        'ID', 'Title', 'Status', 'Classificação', 'Finalidade', 
-        'Descrição', 'Solicitante', 'Nome Motorista', 'Valor',
-        'CPF Motorista', 'Conta Bancaria AG/CC/PIX', 'Gestor',
-        'Ordem de Serviço', 'Criado', 'Banco', 'CPF favorecido',
-        'Modificado', 'Modificado por', 'Placa Cavalo/Carreta',
-        'Empresa', 'Responsável Deposito', 'Agencia',
-        'Conta corrente / poupança', 'Nome Favorecido'
-    ]
-    
-    for coluna in colunas_obrigatorias:
-        if coluna not in novo_df.columns:
-            novo_df[coluna] = None
-    
-    # Garantir que a coluna ID tenha valores
-    if 'ID' in novo_df.columns:
-        # Se ID for None ou vazio, usar índice
-        if novo_df['ID'].isna().all() or (novo_df['ID'].astype(str).str.strip() == '').all():
-            novo_df['ID'] = [f"ID_{i+1}" for i in range(len(novo_df))]
-        else:
-            # Garantir que ID seja string
-            novo_df['ID'] = novo_df['ID'].astype(str).fillna('')
-    
-    # Converter coluna de VALOR para numérico
-    if 'Valor' in novo_df.columns:
-        def converter_valor(valor):
-            if pd.isna(valor):
-                return 0.0
-            
-            # Se já for numérico
-            if isinstance(valor, (int, float, np.integer, np.floating)):
-                return float(valor)
-            
-            # Converter string
-            valor_str = str(valor).strip()
-            
-            # Se vazio
-            if not valor_str:
-                return 0.0
-            
-            # Remover espaços
-            valor_str = valor_str.replace(' ', '')
-            
-            # Se começar com R$
-            if valor_str.startswith('R$'):
-                valor_str = valor_str[2:].strip()
-            
-            # Se tem vírgula e ponto
-            if ',' in valor_str and '.' in valor_str:
-                # Remover pontos (separadores de milhar)
-                valor_str = valor_str.replace('.', '')
-                # Substituir vírgula por ponto decimal
-                valor_str = valor_str.replace(',', '.')
-            elif ',' in valor_str:
-                # Verificar se vírgula é decimal ou separador de milhar
-                if valor_str.count(',') == 1:
-                    partes = valor_str.split(',')
-                    # Se a parte depois da vírgula tem 2 ou 3 dígitos, é decimal
-                    if len(partes[1]) <= 3:
-                        valor_str = valor_str.replace(',', '.')
-                    else:
-                        # Pode ser separador de milhar europeu
-                        valor_str = valor_str.replace(',', '')
-                else:
-                    # Múltiplas vírgulas - provavelmente separadores de milhar
-                    valor_str = valor_str.replace(',', '')
-            
-            # Remover caracteres não numéricos exceto ponto e sinal negativo
-            valor_str = re.sub(r'[^\d\.\-]', '', valor_str)
-            
-            # Se vazio após limpeza
-            if not valor_str:
-                return 0.0
-            
-            # Converter para float
-            try:
-                return float(valor_str)
-            except:
-                return 0.0
-        
-        novo_df['Valor'] = novo_df['Valor'].apply(converter_valor)
-    
-    # Converter colunas de DATA
-    colunas_data = ['Criado', 'Modificado']
-    for col_data in colunas_data:
-        if col_data in novo_df.columns:
-            def converter_data(data_str, col_nome=col_data):
-                if pd.isna(data_str):
-                    return pd.NaT
-                
-                # Se já for datetime
-                if isinstance(data_str, (datetime, pd.Timestamp)):
-                    return pd.to_datetime(data_str)
-                
-                data_str = str(data_str).strip()
-                
-                # Tentar formatos comuns
-                formatos = [
-                    '%d/%m/%Y %H:%M:%S',
-                    '%d/%m/%Y %H:%M',
-                    '%d/%m/%Y',
-                    '%Y-%m-%d %H:%M:%S',
-                    '%Y-%m-%d',
-                    '%m/%d/%Y %H:%M:%S',
-                    '%m/%d/%Y'
-                ]
-                
-                for formato in formatos:
-                    try:
-                        return pd.to_datetime(data_str, format=formato)
-                    except:
-                        continue
-                
-                # Tentar parsing automático
-                try:
-                    return pd.to_datetime(data_str, errors='coerce')
-                except:
-                    return pd.NaT
-            
-            novo_df[col_data] = novo_df[col_data].apply(converter_data)
-    
-    # Se Criado não existe ou está vazio, criar datas fictícias
-    if 'Criado' not in novo_df.columns or novo_df['Criado'].isna().all():
-        novo_df['Criado'] = pd.date_range(start='2026-01-01', periods=len(novo_df), freq='D')
-    
-    # Criar colunas Ano e Mês
-    novo_df['Ano'] = novo_df['Criado'].dt.year
-    novo_df['Mes'] = novo_df['Criado'].dt.month
-    novo_df['Dia'] = novo_df['Criado'].dt.day
-    
-    # Remover linhas com valores essenciais faltantes
-    colunas_essenciais = []
-    if 'Criado' in novo_df.columns:
-        colunas_essenciais.append('Criado')
-    if 'Valor' in novo_df.columns:
-        colunas_essenciais.append('Valor')
-    if 'Solicitante' in novo_df.columns:
-        colunas_essenciais.append('Solicitante')
-    
-    if colunas_essenciais:
-        novo_df = novo_df.dropna(subset=colunas_essenciais)
-    
-    return novo_df
-
+    df = pd.read_excel(caminho_arquivo)
+    df['Criado'] = pd.to_datetime(df['Criado'], errors='coerce')
+    df['Ano'] = df['Criado'].dt.year
+    df['Mes'] = df['Criado'].dt.month
+    return df
 def get_label_color():
     # Detectar tema escuro no Streamlit
     theme = st.get_option("theme.base")
     return "white" if theme == "dark" else "black"
+
 
 def convert_df(df):
     output = io.BytesIO()
@@ -368,6 +29,21 @@ def convert_df(df):
 def get_default_options(available_options, default_list):
     return [opt for opt in default_list if opt in available_options]
 
+# Carregar dados
+try:
+    df = load_data("Projeto-custo-diário-solicitações-de-depósitos.xlsx")
+except Exception as e:
+    st.error(f"Erro ao carregar o arquivo: {e}")
+    st.stop()
+
+# Menu lateral
+menu = st.sidebar.radio("📌 Menu", [
+    "Dashboard Geral",
+    "Análise Detalhada",
+    "Reunião Manutenção Corporativa"
+])
+
+import numpy as np
 def gerar_projecao_mes_atual(df):
     hoje = datetime.today().date()
     primeiro_dia = hoje.replace(day=1)
@@ -377,7 +53,7 @@ def gerar_projecao_mes_atual(df):
     df_mes = df[(df['Criado'].dt.date >= primeiro_dia) & (df['Criado'].dt.date <= hoje)]
 
     if df_mes.empty:
-        # Se não há dados, retornar dataframe vazio
+        # Retorna vazio para evitar erro ao agrupar
         return pd.DataFrame(columns=['Data', 'Valor', 'Tipo']), 0, 0
 
     # Realizado por dia
@@ -385,34 +61,22 @@ def gerar_projecao_mes_atual(df):
     realizado.columns = ['Data', 'Valor']
     realizado['Tipo'] = 'Realizado'
 
-    # Calcular média diária REAL dos dados existentes
-    if len(realizado) >= 3:  # Precisa de dados suficientes para projeção
-        # Estatísticas para projeção
-        # Separar dias úteis e fins de semana
-        dias_uteis = realizado[realizado['Data'].apply(lambda d: d.weekday() < 5)]
-        dias_fds = realizado[realizado['Data'].apply(lambda d: d.weekday() >= 5)]
-        
-        media_uteis = dias_uteis['Valor'].mean() if not dias_uteis.empty else realizado['Valor'].mean()
-        media_fds = dias_fds['Valor'].mean() if not dias_fds.empty else (media_uteis * 0.3 if media_uteis > 0 else 0)  # Reduzido para 30% em fins de semana
-    else:
-        # Se poucos dados, usar média simples
-        media_uteis = realizado['Valor'].mean() if not realizado.empty else 0
-        media_fds = media_uteis * 0.3  # 30% em fins de semana
+    # Estatísticas para projeção
+    media_uteis = realizado[realizado['Data'].apply(lambda d: d.weekday() < 5)]['Valor'].mean()
+    media_fds = realizado[realizado['Data'].apply(lambda d: d.weekday() >= 5)]['Valor'].mean()
+
+    if np.isnan(media_fds):
+        media_fds = media_uteis * 0.5  # fallback
 
     # Dias futuros
     datas_futuras = pd.date_range(hoje + timedelta(days=1), ultimo_dia).date
 
     previsao = []
     for data in datas_futuras:
-        if data.weekday() >= 5:  # Fim de semana
-            valor = media_fds
-        else:  # Dia útil
-            valor = media_uteis
-        
-        # Adicionar pequena variação aleatória (±5%) apenas para visualização
-        if valor > 0:
-            valor = valor * np.random.uniform(0.95, 1.05)
-        
+        if data.weekday() >= 5:
+            valor = media_fds * np.random.uniform(0.9, 1.1)
+        else:
+            valor = media_uteis * np.random.uniform(0.9, 1.1)
         previsao.append({'Data': data, 'Valor': valor, 'Tipo': 'Projetado'})
 
     df_proj = pd.DataFrame(previsao)
@@ -421,97 +85,28 @@ def gerar_projecao_mes_atual(df):
     total_esperado = df_resultado['Valor'].sum()
     return df_resultado, total_esperado, media_uteis
 
-# Função para obter a data inicial padrão com base no dia da semana
-def obter_data_inicio_padrao():
-    hoje = datetime.today().date()
-    dia_semana = hoje.weekday()  # 0 = segunda, 1 = terça, ..., 6 = domingo
-    
-    if dia_semana == 0:  # Segunda-feira
-        # Na segunda, mostrar sexta, sábado e domingo anteriores
-        return hoje - timedelta(days=3)  # Sexta-feira
-    else:
-        # Nos outros dias, mostrar apenas o dia anterior
-        return hoje - timedelta(days=1)
-
-# Função para obter a data final padrão com base no dia da semana
-def obter_data_fim_padrao():
-    hoje = datetime.today().date()
-    dia_semana = hoje.weekday()  # 0 = segunda, 1 = terça, ..., 6 = domingo
-    
-    if dia_semana == 0:  # Segunda-feira
-        # Na segunda, mostrar sexta, sábado e domingo
-        return hoje - timedelta(days=1)  # Domingo
-    else:
-        # Nos outros dias, mostrar apenas o dia anterior
-        return hoje - timedelta(days=1)
-
-# Função para ajustar data padrão se estiver fora do intervalo
-def ajustar_data_padrao(data_padrao, min_date, max_date):
-    if data_padrao < min_date:
-        return min_date
-    elif data_padrao > max_date:
-        return max_date
-    else:
-        return data_padrao
-
-# ======================== CARREGAR DADOS ========================
-try:
-    df = load_data("Projeto-custo-diário-solicitações-de-depósitos.xlsx")
-    
-    # Verificar se os dados foram carregados corretamente
-    if df.empty:
-        st.error("❌ Nenhum dado foi carregado do arquivo.")
-        st.stop()
-        
-except Exception as e:
-    st.error(f"❌ Erro ao carregar o arquivo: {e}")
-    st.stop()
-
-# ======================== MENU LATERAL ========================
-menu = st.sidebar.radio("📌 Menu", [
-    "Dashboard Geral",
-    "Análise Detalhada",
-    "Reunião Manutenção Corporativa"
-])
-
-# ======================== DASHBOARD GERAL ========================
+# ----------------------- DASHBOARD GERAL -----------------------
 if menu == "Dashboard Geral":
     st.sidebar.header("🧮 Filtros")
 
-    # Definir datas padrão baseadas nos dados
-    min_date = df['Criado'].min().date()
-    max_date = df['Criado'].max().date()
-    
-    data_inicio = st.sidebar.date_input("📅 Data Início", value=min_date)
-    data_fim = st.sidebar.date_input("📅 Data Fim", value=max_date)
+    data_inicio = st.sidebar.date_input("📅 Data Início", value=pd.to_datetime("2025-01-01").date())
+    data_fim = st.sidebar.date_input("📅 Data Fim", value=datetime.today().date())
 
-    # Obter opções únicas para os filtros
-    solicitantes_unicos = sorted(df['Solicitante'].dropna().unique())
-    status_unicos = sorted(df['Status'].dropna().unique())
-    gestores_unicos = sorted(df['Gestor'].dropna().unique())
-    classificacoes_unicas = sorted(df['Classificação'].dropna().unique())
-    finalidades_unicas = sorted(df['Finalidade'].dropna().unique())
+    gestores_padrao = [
+        "José Marcos", "Alex de França Silva",
+        "Wesley Duarte Assumpcao", "Renan Francisco Cunha"
+    ]
+    status_padrao = ["Pago"]
+    classificacao_padrao = ["Despesa de veículo"]
 
-    # CORREÇÃO: Lista de gestores padrão exata
-    gestores_padrao = ["Wesley Duarte Assumpção", "Alex de França Silva", "José Wítalo", "José Marcos"]
-    
-    # Filtrar apenas os gestores que existem nos dados
-    gestores_disponiveis = [g for g in gestores_padrao if g in gestores_unicos]
-    
-    # Se não encontrar nenhum, usar os primeiros gestores disponíveis
-    if not gestores_disponiveis and gestores_unicos:
-        gestores_disponiveis = gestores_unicos[:min(4, len(gestores_unicos))]
-    
-    solicitante_sel = st.sidebar.multiselect("🙋‍♂️ Solicitante", solicitantes_unicos)
-    status_sel = st.sidebar.multiselect("📌 Status", status_unicos, default=status_unicos[:5] if len(status_unicos) > 0 else [])
-    gestor_sel = st.sidebar.multiselect("👔 Gestor", gestores_unicos, default=gestores_disponiveis)
-    classif_sel = st.sidebar.multiselect("🏷️ Classificação", classificacoes_unicas)
-    finalidade_sel = st.sidebar.multiselect("🎯 Finalidade", finalidades_unicas)
+    solicitante_sel = st.sidebar.multiselect("🙋‍♂️ Solicitante", df['Solicitante'].dropna().unique())
+    status_sel = st.sidebar.multiselect("📌 Status", df['Status'].dropna().unique(), default=get_default_options(df['Status'].dropna().unique(), status_padrao))
+    gestor_sel = st.sidebar.multiselect("👔 Gestor", df['Gestor'].dropna().unique(), default=get_default_options(df['Gestor'].dropna().unique(), gestores_padrao))
+    classif_sel = st.sidebar.multiselect("🏷️ Classificação", df['Classificação'].dropna().unique(), default=get_default_options(df['Classificação'].dropna().unique(), classificacao_padrao))
+    finalidade_sel = st.sidebar.multiselect("🎯 Finalidade", df['Finalidade'].dropna().unique())
 
-    # Aplicar filtros aos dados
     df_filtrado = df.copy()
     df_filtrado = df_filtrado[df_filtrado['Criado'].dt.date.between(data_inicio, data_fim)]
-    
     if solicitante_sel:
         df_filtrado = df_filtrado[df_filtrado['Solicitante'].isin(solicitante_sel)]
     if status_sel:
@@ -524,303 +119,156 @@ if menu == "Dashboard Geral":
         df_filtrado = df_filtrado[df_filtrado['Finalidade'].isin(finalidade_sel)]
 
     st.title("📊 Relatório de custos gerais | Solicitações de Depósitos")
-    
     with st.expander("📌 Filtros aplicados", expanded=False):
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write(f"**Período:** {data_inicio.strftime('%d/%m/%Y')} até {data_fim.strftime('%d/%m/%Y')}")
-            st.write(f"**Solicitante:** {solicitante_sel if solicitante_sel else 'Todos'}")
-            st.write(f"**Status:** {status_sel if status_sel else 'Todos'}")
-        with col2:
-            st.write(f"**Gestor:** {gestor_sel if gestor_sel else 'Todos'}")
-            st.write(f"**Classificação:** {classif_sel if classif_sel else 'Todos'}")
-            st.write(f"**Finalidade:** {finalidade_sel if finalidade_sel else 'Todos'}")
+        st.write(f"**Período:** {data_inicio} até {data_fim}")
+        st.write(f"**Solicitante:** {solicitante_sel if solicitante_sel else 'Todos'}")
+        st.write(f"**Status:** {status_sel if status_sel else 'Todos'}")
+        st.write(f"**Gestor:** {gestor_sel if gestor_sel else 'Todos'}")
+        st.write(f"**Classificação:** {classif_sel if classif_sel else 'Todos'}")
+        st.write(f"**Finalidade:** {finalidade_sel if finalidade_sel else 'Todos'}")
 
-    # Calcular métricas CORRETAMENTE
-    if not df_filtrado.empty:
-        custo_total = df_filtrado['Valor'].sum()
-        qtd_registros = df_filtrado.shape[0]
-        
-        # Calcular número de dias úteis DISTINTOS no período
-        dias_distintos = df_filtrado['Criado'].dt.date.nunique()
-        
-        # Se não há dias distintos (por exemplo, todos os registros são do mesmo dia)
-        if dias_distintos == 0:
-            dias_distintos = 1
-            
-        # Calcular custo médio diário CORRETO
-        custo_medio_diario = custo_total / dias_distintos if dias_distintos > 0 else 0
-        
-        # Calcular custo médio por registro
-        custo_medio_por_registro = custo_total / qtd_registros if qtd_registros > 0 else 0
-        
-        # Mostrar métricas no formato brasileiro
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("💰 Custo Total", f"R$ {formatar_brasileiro(custo_total)}")
-        col2.metric("📅 Custo Médio Diário", f"R$ {formatar_brasileiro(custo_medio_diario)}")
-        col3.metric("📄 Custo Médio por Registro", f"R$ {formatar_brasileiro(custo_medio_por_registro)}")
-        col4.metric("📝 Qtd. Registros", f"{qtd_registros:,}")
-    else:
-        st.warning("⚠️ Não há dados para calcular métricas com os filtros aplicados.")
-        # Métricas vazias
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("💰 Custo Total", "R$ 0,00")
-        col2.metric("📅 Custo Médio Diário", "R$ 0,00")
-        col3.metric("📄 Custo Médio por Registro", "R$ 0,00")
-        col4.metric("📝 Qtd. Registros", "0")
+    custo_total = df_filtrado['Valor'].sum()
+    qtd_registros = df_filtrado.shape[0]
+    dias_distintos = df_filtrado['Criado'].dt.date.nunique()
+    custo_medio_diario = custo_total / dias_distintos if dias_distintos else 0
+    custo_medio_por_registro = custo_total / qtd_registros if qtd_registros else 0
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("💰 Custo Total", f"R$ {custo_total:,.2f}")
+    col2.metric("📅 Custo Médio Diário", f"R$ {custo_medio_diario:,.2f}")
+    col3.metric("📄 Custo Médio por Registro", f"R$ {custo_medio_por_registro:,.2f}")
+    col4.metric("📝 Qtd. Registros", qtd_registros)
 
     st.markdown("### 📈 Projeção de Custos do Mês Atual")
-    
-    # Gerar projeção baseada nos dados FILTRADOS
+
     df_proj_mes, total_projetado, media_diaria_proj = gerar_projecao_mes_atual(df_filtrado)
-    
-    if not df_proj_mes.empty and total_projetado > 0:
-        # Formatar valores para exibição
-        df_proj_mes_display = df_proj_mes.copy()
-        df_proj_mes_display['Valor_Formatado'] = df_proj_mes_display['Valor'].apply(formatar_brasileiro)
-        
-        fig_proj_mes = px.bar(df_proj_mes, x='Data', y='Valor', color='Tipo',
-                              color_discrete_map={'Realizado': 'blue', 'Projetado': 'green'},
-                              labels={'Valor': 'R$', 'Data': 'Data'},
-                              title="Projeção de Custos Diários no Mês Atual")
 
-        fig_proj_mes.update_layout(
-            barmode='group',
-            xaxis_title="Data",
-            yaxis_title="Valor (R$)",
-            hoverlabel=dict(font_size=25),
-            showlegend=True
-        )
+    fig_proj_mes = px.bar(df_proj_mes, x='Data', y='Valor', color='Tipo',
+                          color_discrete_map={'Realizado': 'blue', 'Projetado': 'green'},
+                          labels={'Valor': 'R$', 'Data': 'Data'},
+                          title="Projeção de Custos Diários no Mês Atual")
 
-        # Atualizar textos com formato brasileiro nos hovers
-        fig_proj_mes.update_traces(
-            hovertemplate='Data: %{x}<br>Valor: R$ %{y:,.2f}<extra></extra>',
-            textposition='outside',
-            textangle=0,
-            cliponaxis=False,
-            textfont=dict(size=12, color='black')
-        )
+    fig_proj_mes.update_layout(
+        barmode='group',
+        xaxis_title="Data",
+        yaxis_title="Valor (R$)",
+        hoverlabel=dict(font_size=25),
+        showlegend=True
+    )
 
-        st.plotly_chart(fig_proj_mes, use_container_width=True)
-        
-        # Calcular custo realizado até agora
-        hoje = datetime.today().date()
-        primeiro_dia = hoje.replace(day=1)
-        
-        df_mes_atual = df_filtrado[(df_filtrado['Criado'].dt.date >= primeiro_dia) & 
-                                  (df_filtrado['Criado'].dt.date <= hoje)]
-        custo_realizado = df_mes_atual['Valor'].sum() if not df_mes_atual.empty else 0
-        
-        st.success(f"""
-        📌 **Resumo da Projeção:**
-        - Custo realizado até agora: **R$ {formatar_brasileiro(custo_realizado)}**
-        - Projeção até o fim do mês: **R$ {formatar_brasileiro(total_projetado)}**
-        - Média diária projetada: **R$ {formatar_brasileiro(media_diaria_proj)}**
-        """)
-    else:
-        st.info("ℹ️ Não há dados suficientes para gerar projeção deste mês.")
+    fig_proj_mes.update_traces(
+    texttemplate='R$ %{y:,.2f}',
+    textposition='outside',
+    textangle=0,
+    cliponaxis=False,
+    textfont=dict(size=40, color='black')  # 👈 AQUI
+)
 
-    # Gráfico temporal por mês
-    st.markdown("### 📅 Custo por Mês")
-    
+
+    st.plotly_chart(fig_proj_mes, use_container_width=True)
+
+    st.success(f"📌 Estimativa de custo total até o fim do mês: **R$ {total_projetado:,.2f}**")
+
     df_temporal = df_filtrado.groupby(df_filtrado['Criado'].dt.to_period('M')).agg({'Valor': 'sum'}).reset_index()
     df_temporal['Criado'] = df_temporal['Criado'].astype(str)
 
-    if not df_temporal.empty:
-        # Formatar valores para exibição
-        df_temporal['Valor_Formatado'] = df_temporal['Valor'].apply(formatar_brasileiro)
-        
-        fig_temporal = px.line(
-            df_temporal,
-            x='Criado',
-            y='Valor',
-            markers=True,
-            text=df_temporal['Valor_Formatado'].apply(lambda x: f"R$ {x}"),
-            title="Custo por Mês",
-            labels={'Valor': 'R$', 'Criado': 'Mês'}
-        )
+    fig_temporal = px.line(
+        df_temporal,
+        x='Criado',
+        y='Valor',
+        markers=True,
+        text=df_temporal['Valor'].apply(lambda x: f"R$ {x:,.2f}"),
+        title="Custo por Mês",
+        labels={'Valor': 'R$', 'Criado': 'Mês'}
+    )
 
-        fig_temporal.update_traces(
-            textposition='top center',
-            textfont=dict(size=14, color='black'),
-            mode='lines+markers+text'
-        )
+    fig_temporal.update_traces(
+        textposition='top center',  # ✅ posição do valor acima do ponto
+        textfont=dict(size=14, color='black'),
+        mode='lines+markers+text'  # ✅ exibe linha + ponto + texto
+    )
 
-        fig_temporal.update_layout(
-            hoverlabel=dict(font_size=20),
-            xaxis_title="Mês",
-            yaxis_title="Valor (R$)"
-        )
+    fig_temporal.update_layout(
+        hoverlabel=dict(font_size=20),
+        xaxis_title="Mês",
+        yaxis_title="Valor (R$)"
+    )
 
-        st.plotly_chart(fig_temporal, use_container_width=True)
-    else:
-        st.info("ℹ️ Não há dados para mostrar o gráfico temporal.")
+    st.plotly_chart(fig_temporal, use_container_width=True)
 
-    # Gráfico por finalidade (colunas VERTICAIS) - CORRIGIDO
+
+
+
     st.markdown("### 🎯 Custo por Finalidade")
-    
-    # Agrupar por Finalidade corretamente
+
+    # Agrupar os dados por finalidade
     df_finalidade = df_filtrado.groupby('Finalidade')['Valor'].sum().reset_index()
-    df_finalidade = df_finalidade.sort_values('Valor', ascending=False).head(15)
 
-    if not df_finalidade.empty:
-        # Formatar valores para exibição
-        df_finalidade['Valor_Formatado'] = df_finalidade['Valor'].apply(formatar_brasileiro)
-        
-        # Limitar o tamanho dos labels para melhor visualização
-        df_finalidade['Finalidade_Truncada'] = df_finalidade['Finalidade'].apply(
-            lambda x: (x[:50] + '...') if len(str(x)) > 50 else str(x)
-        )
-        
-        fig_finalidade = px.bar(
-            df_finalidade,
-            x='Finalidade_Truncada',
-            y='Valor',
-            color='Finalidade',
-            text=df_finalidade['Valor_Formatado'].apply(lambda x: f"R$ {x}"),
-            labels={'Valor': 'R$', 'Finalidade_Truncada': 'Finalidade'},
-            title="Custo por Finalidade (Top 15)"
-        )
+    # Criar gráfico horizontal com os valores fixos ao final da barra
+    fig_finalidade = px.bar(
+    df_finalidade,
+    x='Valor',
+    y='Finalidade',
+    color='Finalidade',
+    orientation='h',
+    text=df_finalidade['Valor'].apply(lambda x: f"R$ {x:,.2f}"),  # ✅ Correção AQUI
+    labels={'Valor': 'R$', 'Finalidade': 'Finalidade'}
+    )
 
-        fig_finalidade.update_traces(
-            textposition='outside',
-            textfont=dict(size=12, color="black"),
-            cliponaxis=False
-        )
+    fig_finalidade.update_traces(
+        textposition='outside',
+        textfont=dict(size=16, color="black"),
+        cliponaxis=False
+    )
 
-        fig_finalidade.update_layout(
-            xaxis_title="Finalidade",
-            yaxis_title="Valor (R$)",
-            xaxis_tickangle=-45,
-            hoverlabel=dict(font_size=15),
-            margin=dict(t=40, b=120, l=60, r=40),
-            height=500,
-            showlegend=False
-        )
+    # Ajustar layout
+    fig_finalidade.update_layout(
+        xaxis_title="Valor (R$)",
+        yaxis_title="Finalidade",
+        yaxis=dict(categoryorder='total ascending'),
+        hoverlabel=dict(font_size=15),
+        margin=dict(l=120, r=40, t=40, b=40)  # aumenta margem esquerda para texto
+    )
 
-        st.plotly_chart(fig_finalidade, use_container_width=True)
-    else:
-        st.info("ℹ️ Não há dados para mostrar o gráfico por finalidade.")
-
-    # Gráfico por classificação
-    st.markdown("### 🏷️ Custo por Classificação")
+    # Exibir gráfico
+    st.plotly_chart(fig_finalidade, use_container_width=True)
     
+
+    st.markdown("### 🏷️ Custo por Classificação")
     df_classificacao = df_filtrado.groupby('Classificação')['Valor'].sum().reset_index()
+    fig_classificacao = px.pie(df_classificacao, names='Classificação', values='Valor', hole=0.3)
+    fig_classificacao.update_traces(
+        hovertemplate='%{label}<br>R$ %{value:,.2f}<extra></extra>',
+        textinfo='label+percent')
+    fig_classificacao.update_layout(hoverlabel=dict(font_size=20))
 
-    if not df_classificacao.empty:
-        # Formatar valores para exibição no hover
-        df_classificacao['Valor_Formatado'] = df_classificacao['Valor'].apply(formatar_brasileiro)
-        
-        fig_classificacao = px.pie(df_classificacao, names='Classificação', values='Valor', hole=0.3)
-        fig_classificacao.update_traces(
-            hovertemplate='%{label}<br>R$ %{customdata}<extra></extra>',
-            customdata=df_classificacao['Valor_Formatado'],
-            textinfo='label+percent'
-        )
-        fig_classificacao.update_layout(hoverlabel=dict(font_size=20))
-        st.plotly_chart(fig_classificacao, use_container_width=True)
-    else:
-        st.info("ℹ️ Não há dados para mostrar o gráfico por classificação.")
+    st.plotly_chart(fig_classificacao, use_container_width=True)
 
-    # Tabela de dados com TODAS as colunas solicitadas
-    st.markdown("### 📋 Tabela de Dados Completa")
-    if not df_filtrado.empty:
-        # Definir a ordem das colunas conforme solicitado
-        colunas_ordem = [
-            'ID', 'Title', 'Status', 'Classificação', 'Finalidade',
-            'Descrição', 'Solicitante', 'Nome Motorista', 'Valor',
-            'CPF Motorista', 'Conta Bancaria AG/CC/PIX', 'Gestor',
-            'Ordem de Serviço', 'Criado', 'Banco', 'CPF favorecido',
-            'Modificado', 'Modificado por', 'Placa Cavalo/Carreta',
-            'Empresa', 'Responsável Deposito', 'Agencia',
-            'Conta corrente / poupança', 'Nome Favorecido',
-            'Ano', 'Mes', 'Dia'
-        ]
-        
-        # Filtrar apenas as colunas que existem no DataFrame
-        colunas_existentes = [col for col in colunas_ordem if col in df_filtrado.columns]
-        
-        # Criar uma cópia para exibição
-        df_display = df_filtrado[colunas_existentes].copy()
-        
-        # Formatar a coluna Valor para exibição
-        if 'Valor' in df_display.columns:
-            df_display['Valor (R$)'] = df_display['Valor'].apply(formatar_brasileiro)
-            # Mover a coluna formatada para depois da coluna Valor original
-            cols = df_display.columns.tolist()
-            valor_idx = cols.index('Valor')
-            cols.insert(valor_idx + 1, 'Valor (R$)')
-            cols.remove('Valor (R$)')
-            df_display = df_display[cols]
-        
-        # Formatar as colunas de data
-        colunas_data = ['Criado', 'Modificado']
-        for col_data in colunas_data:
-            if col_data in df_display.columns:
-                df_display[col_data] = df_display[col_data].dt.strftime('%d/%m/%Y %H:%M')
-        
-        # Mostrar a tabela
-        st.dataframe(df_display, use_container_width=True, height=400)
-        
-        # Botão para baixar dados
-        nome_arquivo = f"dados_filtrados_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xlsx"
-        st.download_button(
-            "📥 Baixar dados filtrados (Excel)",
-            data=convert_df(df_filtrado),
-            file_name=nome_arquivo,
-            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-    else:
-        st.warning("⚠️ Não há dados para exportar com os filtros aplicados.")
+    nome_arquivo = f"dados_filtrados_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xlsx"
+    st.download_button("📥 Baixar dados filtrados (Excel)", data=convert_df(df_filtrado), file_name=nome_arquivo, mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
-# ======================== ANÁLISE DETALHADA ========================
+# ----------------------- ANÁLISE DETALHADA -----------------------
 elif menu == "Análise Detalhada":
     st.title("👤 Análise por Solicitante")
-    st.sidebar.header("🧮 Filtros")
 
-    # Definir datas padrão baseadas no dia da semana
-    data_inicio_padrao = obter_data_inicio_padrao()
-    data_fim_padrao = obter_data_fim_padrao()
-    
-    # Obter min_date e max_date dos dados
-    min_date = df['Criado'].min().date()
-    max_date = df['Criado'].max().date()
-    
-    # Ajustar datas padrão se necessário
-    data_inicio_padrao_ajustada = ajustar_data_padrao(data_inicio_padrao, min_date, max_date)
-    data_fim_padrao_ajustada = ajustar_data_padrao(data_fim_padrao, min_date, max_date)
-    
-    data_inicio = st.sidebar.date_input("📅 Data Início", 
-                                       value=data_inicio_padrao_ajustada, 
-                                       min_value=min_date, 
-                                       max_value=max_date)
-    data_fim = st.sidebar.date_input("📅 Data Fim", 
-                                    value=data_fim_padrao_ajustada, 
-                                    min_value=min_date, 
-                                    max_value=max_date)
+    ontem = (datetime.today() - timedelta(days=1)).date()
 
-    # Obter opções únicas
-    status_unicos = sorted(df['Status'].dropna().unique())
-    classificacoes_unicas = sorted(df['Classificação'].dropna().unique())
-    gestores_unicos = sorted(df['Gestor'].dropna().unique())
-    
-    # CORREÇÃO: Lista de gestores padrão exata
-    gestores_padrao = ["Wesley Duarte Assumpção", "Alex de França Silva", "José Wítalo", "José Marcos"]
-    gestores_disponiveis = [g for g in gestores_padrao if g in gestores_unicos]
-    
-    # Se não encontrar nenhum, usar os primeiros gestores disponíveis
-    if not gestores_disponiveis and gestores_unicos:
-        gestores_disponiveis = gestores_unicos[:min(4, len(gestores_unicos))]
+    data_inicio = st.sidebar.date_input("📅 Data Início", value=ontem)
+    data_fim = st.sidebar.date_input("📅 Data Fim", value=ontem)
 
-    # Aplicar filtros básicos
-    status_sel = st.sidebar.multiselect("📌 Status", status_unicos, default=status_unicos[:3] if status_unicos else [])
-    classif_sel = st.sidebar.multiselect("🏷️ Classificação", classificacoes_unicas)
-    gestor_sel = st.sidebar.multiselect("👔 Gestor", gestores_unicos, default=gestores_disponiveis)
+    status_padrao = ["Pago"]
+    classificacao_padrao = ["Despesa de Veiculo"]
+    gestores_padrao = ["José Marcos", "Alex de França Silva", "Wesley Duarte Assumpcao", "Renan Francisco Cunha"]
 
-    # Aplicar filtros aos dados
+    status_sel = st.sidebar.multiselect("📌 Status", df['Status'].dropna().unique(),
+                                        default=get_default_options(df['Status'].dropna().unique(), status_padrao))
+    classif_sel = st.sidebar.multiselect("🏷️ Classificação", df['Classificação'].dropna().unique(),
+                                         default=get_default_options(df['Classificação'].dropna().unique(), classificacao_padrao))
+    gestor_sel = st.sidebar.multiselect("👔 Gestor", df['Gestor'].dropna().unique(),
+                                        default=get_default_options(df['Gestor'].dropna().unique(), gestores_padrao))
+
     df_filtrado = df.copy()
     df_filtrado = df_filtrado[df_filtrado['Criado'].dt.date.between(data_inicio, data_fim)]
-    
     if status_sel:
         df_filtrado = df_filtrado[df_filtrado['Status'].isin(status_sel)]
     if classif_sel:
@@ -828,10 +276,10 @@ elif menu == "Análise Detalhada":
     if gestor_sel:
         df_filtrado = df_filtrado[df_filtrado['Gestor'].isin(gestor_sel)]
 
-    # Selecionar solicitante
     solicitantes_disponiveis = sorted(df_filtrado['Solicitante'].dropna().unique())
     solicitante_select = st.selectbox("🙋‍♂️ Selecione um Solicitante", options=["Todos"] + solicitantes_disponiveis)
 
+    # Aplicar filtro extra se um solicitante for escolhido
     if solicitante_select != "Todos":
         df_filtrado = df_filtrado[df_filtrado['Solicitante'] == solicitante_select]
 
@@ -848,322 +296,185 @@ elif menu == "Análise Detalhada":
             st.subheader(f"{solicitante_select}")
         with col2:
             mcol1, mcol2, mcol3 = st.columns(3)
-            mcol1.metric("💰 Custo Total", f"R$ {formatar_brasileiro(custo_total)}")
-            mcol2.metric("⚖️ Custo Médio por Solicitação", f"R$ {formatar_brasileiro(custo_medio_por_solicitacao)}")
-            mcol3.metric("📅 Custo Médio Diário", f"R$ {formatar_brasileiro(custo_medio_diario)}")
+            mcol1.metric("💰 Custo Total", f"R$ {custo_total:,.2f}")
+            mcol2.metric("⚖️ Custo Médio por Solicitação", f"R$ {custo_medio_por_solicitacao:,.2f}")
+            mcol3.metric("📅 Custo Médio Diário", f"R$ {custo_medio_diario:,.2f}")
 
-        # Gráfico de evolução temporal
-        st.markdown("### 📈 Evolução Temporal")
-        if not df_filtrado.empty:
-            df_evolucao = df_filtrado.groupby(df_filtrado['Criado'].dt.date)['Valor'].sum().reset_index()
-            df_evolucao['Valor_Formatado'] = df_evolucao['Valor'].apply(formatar_brasileiro)
-            
-            fig_evolucao = px.line(df_evolucao, x='Criado', y='Valor', markers=True,
-                                   title=f"Evolução de Custos - {solicitante_select}")
-            fig_evolucao.update_traces(
-                hovertemplate='Data: %{x|%d/%m/%Y}<br>Valor: R$ %{customdata}<extra></extra>',
-                customdata=df_evolucao['Valor_Formatado']
-            )
-            st.plotly_chart(fig_evolucao, use_container_width=True)
     else:
         st.markdown("### 📊 Resumo Geral")
         total_geral = df_filtrado['Valor'].sum()
         qtd_registros = df_filtrado.shape[0]
 
         col1, col2 = st.columns(2)
-        col1.metric("💰 Custo Total no Período", f"R$ {formatar_brasileiro(total_geral)}")
-        col2.metric("📝 Qtd. Registros", f"{qtd_registros:,}")
+        col1.metric("💰 Custo Total no Período", f"R$ {total_geral:,.2f}")
+        col2.metric("📝 Qtd. Registros", qtd_registros)
+
 
         st.markdown("### 👥 Custo por Solicitante")
-        if not df_filtrado.empty:
-            df_por_solicitante = df_filtrado.groupby('Solicitante').agg({
-                'Valor': 'sum',
-                'ID': 'count'
-            }).reset_index()
-            df_por_solicitante.rename(columns={'ID': 'QtdSolicitações'}, inplace=True)
-            df_por_solicitante = df_por_solicitante.sort_values('Valor', ascending=False).head(20)
-            
-            # Formatar valores
-            df_por_solicitante['Valor_Formatado'] = df_por_solicitante['Valor'].apply(formatar_brasileiro)
-            
-            fig_solicitante = px.bar(
-                df_por_solicitante,
-                x='Valor',
-                y='Solicitante',
-                color='Solicitante',
-                orientation='h',
-                text=df_por_solicitante.apply(lambda row: f"R$ {row['Valor_Formatado']} ({row['QtdSolicitações']})", axis=1),
-                labels={'Valor': 'R$', 'Solicitante': 'Solicitante'}
-            )
+        df_por_solicitante = df_filtrado.groupby('Solicitante')['Valor'].sum().reset_index()
 
-            fig_solicitante.update_traces(
-                textposition='outside',
-                textfont=dict(size=12, color="black"),
-                cliponaxis=False
-            )
+        df_por_solicitante = df_filtrado.groupby('Solicitante').agg({
+            'Valor': 'sum',
+            'ID': 'count'  # ou outro campo não nulo para contar registros
+        }).reset_index()
+        df_por_solicitante.rename(columns={'ID': 'QtdSolicitações'}, inplace=True)
 
-            fig_solicitante.update_layout(
-                xaxis_title="Valor (R$)",
-                yaxis_title="Solicitante",
-                yaxis=dict(categoryorder='total ascending'),
-                hoverlabel=dict(font_size=15),
-                margin=dict(l=120, r=40, t=40, b=40),
-                height=600
-            )
-
-            st.plotly_chart(fig_solicitante, use_container_width=True)
-
-    # Tabela de dados com TODAS as colunas solicitadas
-    st.markdown("### 📋 Tabela de Solicitações Completa")
-    if not df_filtrado.empty:
-        # Definir a ordem das colunas conforme solicitado
-        colunas_ordem = [
-            'ID', 'Title', 'Status', 'Classificação', 'Finalidade',
-            'Descrição', 'Solicitante', 'Nome Motorista', 'Valor',
-            'CPF Motorista', 'Conta Bancaria AG/CC/PIX', 'Gestor',
-            'Ordem de Serviço', 'Criado', 'Banco', 'CPF favorecido',
-            'Modificado', 'Modificado por', 'Placa Cavalo/Carreta',
-            'Empresa', 'Responsável Deposito', 'Agencia',
-            'Conta corrente / poupança', 'Nome Favorecido',
-            'Ano', 'Mes', 'Dia'
-        ]
-        
-        # Filtrar apenas as colunas que existem no DataFrame
-        colunas_existentes = [col for col in colunas_ordem if col in df_filtrado.columns]
-        
-        # Criar uma cópia para exibição
-        df_display = df_filtrado[colunas_existentes].copy()
-        
-        # Formatar a coluna Valor para exibição
-        if 'Valor' in df_display.columns:
-            df_display['Valor (R$)'] = df_display['Valor'].apply(formatar_brasileiro)
-            # Mover a coluna formatada para depois da coluna Valor original
-            cols = df_display.columns.tolist()
-            valor_idx = cols.index('Valor')
-            cols.insert(valor_idx + 1, 'Valor (R$)')
-            cols.remove('Valor (R$)')
-            df_display = df_display[cols]
-        
-        # Formatar as colunas de data
-        colunas_data = ['Criado', 'Modificado']
-        for col_data in colunas_data:
-            if col_data in df_display.columns:
-                df_display[col_data] = df_display[col_data].dt.strftime('%d/%m/%Y %H:%M')
-        
-        # Mostrar a tabela
-        st.dataframe(df_display, use_container_width=True, height=400)
-        
-        # Botão para download (mantém valores numéricos no Excel)
-        nome_arquivo = f"analise_{solicitante_select if solicitante_select != 'Todos' else 'geral'}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xlsx"
-        st.download_button(
-            "📥 Baixar Dados (Excel)",
-            data=convert_df(df_filtrado),
-            file_name=nome_arquivo,
-            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        fig_solicitante = px.bar(
+            df_por_solicitante,
+            x='Valor',
+            y='Solicitante',
+            color='Solicitante',
+            orientation='h',
+            text=df_por_solicitante.apply(lambda row: f"R$ {row['Valor']:,.2f} ({row['QtdSolicitações']})", axis=1),
+            labels={'Valor': 'R$', 'Solicitante': 'Solicitante'},
+            custom_data=['QtdSolicitações']  # 👉 Aqui está a diferença
         )
-    else:
-        st.warning("⚠️ Não há dados para mostrar com os filtros aplicados.")
 
-# ======================== REUNIÃO MANUTENÇÃO CORPORATIVA ========================
+        fig_solicitante.update_traces(
+            textposition='outside',
+            textfont=dict(size=14, color="black"),
+            cliponaxis=False,
+            hovertemplate='<b>%{y}</b><br>Valor Total: R$ %{x:,.2f}<br>Qtd Solicitações: %{customdata[0]}<extra></extra>'
+        )
+
+
+
+        fig_solicitante.update_traces(
+            textposition='outside',
+            textfont=dict(size=14, color="black"),
+            cliponaxis=False
+        )
+
+        fig_solicitante.update_layout(
+            xaxis_title="Valor (R$)",
+            yaxis_title="Solicitante",
+            yaxis=dict(categoryorder='total ascending'),
+            hoverlabel=dict(font_size=20),
+            margin=dict(l=120, r=40, t=40, b=40)
+        )
+
+        st.plotly_chart(fig_solicitante, use_container_width=True)
+
+    # 🔄 Custo por finalidade (respeita o filtro do solicitante)
+    st.markdown("### 🎯 Custo por Finalidade")
+    df_finalidade = df_filtrado.groupby('Finalidade')['Valor'].sum().reset_index()
+
+    fig_finalidade = px.bar(
+        df_finalidade,
+        x='Finalidade',
+        y='Valor',
+        color='Finalidade',
+        text=df_finalidade['Valor'].apply(lambda x: f"R$ {x:,.2f}"),
+        labels={'Valor': 'R$'}
+    )
+    fig_finalidade.update_traces(
+        textposition='outside',
+        textfont=dict(size=14, color="black"),
+        cliponaxis=False
+    )
+    fig_finalidade.update_layout(
+        xaxis={'categoryorder': 'total descending'},
+        yaxis_title="Valor (R$)",
+        hoverlabel=dict(font_size=20)
+    )
+    st.plotly_chart(fig_finalidade, use_container_width=True)
+
+    # 🔄 Tabela respeita filtros
+    st.markdown("### 📋 Tabela de Solicitações")
+    st.dataframe(df_filtrado.style.format({'Valor': 'R$ {:,.2f}'}), use_container_width=True)
+
+    nome_arquivo = f"analise_{solicitante_select}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xlsx"
+    st.download_button("📥 Baixar Dados (Excel)", data=convert_df(df_filtrado), file_name=nome_arquivo, mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+# ----------------------- REUNIÃO MANUTENÇÃO CORPORATIVA -----------------------
 elif menu == "Reunião Manutenção Corporativa":
     st.title("🏗️ Relatório | Reunião de Manutenção Corporativa")
-    st.sidebar.header("🧮 Filtros")
 
-    # Definir datas padrão baseadas no dia da semana
-    data_inicio_padrao = obter_data_inicio_padrao()
-    data_fim_padrao = obter_data_fim_padrao()
-    
-    # Obter min_date e max_date dos dados
-    min_date = df['Criado'].min().date()
-    max_date = df['Criado'].max().date()
-    
-    # Ajustar datas padrão se necessário
-    data_inicio_padrao_ajustada = ajustar_data_padrao(data_inicio_padrao, min_date, max_date)
-    data_fim_padrao_ajustada = ajustar_data_padrao(data_fim_padrao, min_date, max_date)
-    
-    data_inicio = st.sidebar.date_input("📅 Data Início", 
-                                       value=data_inicio_padrao_ajustada, 
-                                       min_value=min_date, 
-                                       max_value=max_date)
-    data_fim = st.sidebar.date_input("📅 Data Fim", 
-                                    value=data_fim_padrao_ajustada, 
-                                    min_value=min_date, 
-                                    max_value=max_date)
+    ontem = (datetime.today() - timedelta(days=1)).date()
+    data_inicio = st.sidebar.date_input("📅 Data Início", value=ontem)
+    data_fim = st.sidebar.date_input("📅 Data Fim", value=ontem)
 
-    # Obter opções únicas
-    gestores_unicos = sorted(df['Gestor'].dropna().unique())
-    status_unicos = sorted(df['Status'].dropna().unique())
-    classificacoes_unicas = sorted(df['Classificação'].dropna().unique())
-    
-    # CORREÇÃO: Lista de gestores padrão exata
-    gestores_padrao = ["Wesley Duarte Assumpção", "Alex de França Silva", "José Wítalo", "José Marcos"]
-    gestores_disponiveis = [g for g in gestores_padrao if g in gestores_unicos]
-    
-    # Se não encontrar nenhum, usar os primeiros gestores disponíveis
-    if not gestores_disponiveis and gestores_unicos:
-        gestores_disponiveis = gestores_unicos[:min(4, len(gestores_unicos))]
+    gestores_default = ["José Marcos", "Alex de França Silva", "Wesley Duarte Assumpcao", "Renan Francisco Cunha"]
+    status_default = ["Pago"]
+    classif_default = ["Despesa de Veiculo"]
 
-    # Aplicar filtros
-    gestor_sel = st.sidebar.multiselect("Gestor", gestores_unicos, default=gestores_disponiveis)
-    status_sel = st.sidebar.multiselect("Status", status_unicos, default=status_unicos[:3] if status_unicos else [])
-    classif_sel = st.sidebar.multiselect("Classificação", classificacoes_unicas)
+    gestor_sel = st.sidebar.multiselect("Gestor", df['Gestor'].dropna().unique(),
+                                        default=get_default_options(df['Gestor'].dropna().unique(), gestores_default))
+    status_sel = st.sidebar.multiselect("Status", df['Status'].dropna().unique(),
+                                        default=get_default_options(df['Status'].dropna().unique(), status_default))
+    classif_sel = st.sidebar.multiselect("Classificação", df['Classificação'].dropna().unique(),
+                                         default=get_default_options(df['Classificação'].dropna().unique(), classif_default))
 
-    # Filtrar dados
     df_rm = df[df['Criado'].dt.date.between(data_inicio, data_fim)]
-    
-    if gestor_sel:
-        df_rm = df_rm[df_rm['Gestor'].isin(gestor_sel)]
-    if status_sel:
-        df_rm = df_rm[df_rm['Status'].isin(status_sel)]
-    if classif_sel:
-        df_rm = df_rm[df_rm['Classificação'].isin(classif_sel)]
+    df_rm = df_rm[df_rm['Gestor'].isin(gestor_sel)]
+    df_rm = df_rm[df_rm['Status'].isin(status_sel)]
+    df_rm = df_rm[df_rm['Classificação'].isin(classif_sel)]
 
-    # Calcular métricas
-    if not df_rm.empty:
-        custo_total = df_rm['Valor'].sum()
-        qtd_registros = df_rm.shape[0]
-        custo_medio = custo_total / qtd_registros if qtd_registros else 0
-        
-        # Encontrar maior solicitação
-        if not df_rm.empty:
-            maior_idx = df_rm['Valor'].idxmax()
-            maior_solicitacao = df_rm.loc[maior_idx]
-        else:
-            maior_solicitacao = None
-    else:
-        custo_total = 0
-        qtd_registros = 0
-        custo_medio = 0
-        maior_solicitacao = None
+    custo_total = df_rm['Valor'].sum()
+    qtd_registros = df_rm.shape[0]
+    custo_medio = custo_total / qtd_registros if qtd_registros else 0
+    maior_solicitacao = df_rm.loc[df_rm['Valor'].idxmax()] if not df_rm.empty else None
 
-    # Mostrar métricas no formato brasileiro
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("💰 Custo Total", f"R$ {formatar_brasileiro(custo_total)}")
-    col2.metric("📋 Custo Médio por Solicitação", f"R$ {formatar_brasileiro(custo_medio)}")
-    col3.metric("📝 Qtd. Registros", f"{qtd_registros:,}")
-    
-    if maior_solicitacao is not None and not pd.isna(maior_solicitacao['Valor']):
+    col1.metric("💰 Custo Total", f"R$ {custo_total:,.2f}")
+    col2.metric("📋 Custo Médio por Solicitação", f"R$ {custo_medio:,.2f}")
+    col3.metric("📝 Qtd. Registros", qtd_registros)
+    if maior_solicitacao is not None:
         col4.markdown(f"""
-            <div style='font-size: 24px; font-weight: bold;'>R$ {formatar_brasileiro(maior_solicitacao['Valor'])}</div>
-            <div style='font-size: 14px;'>ID: {maior_solicitacao.get('ID', 'N/A')} - {maior_solicitacao.get('Solicitante', 'N/A')}</div>
+            <div style='font-size: 24px; font-weight: bold;'>R$ {maior_solicitacao['Valor']:,.2f}</div>
+            <div style='font-size: 14px;'>ID: {maior_solicitacao['ID']} - {maior_solicitacao['Solicitante']}</div>
         """, unsafe_allow_html=True)
     else:
         col4.metric("🔝 Maior Solicitação", "Sem dados")
 
-    # Gráfico por finalidade (colunas HORIZONTAIS) - CORRIGIDO
+
     st.markdown("### 📈 Custo por Finalidade no Período")
-    if not df_rm.empty:
-        df_final = df_rm.groupby('Finalidade')['Valor'].sum().reset_index()
-        df_final = df_final.sort_values('Valor', ascending=False).head(15)
-        
-        # Formatar valores para exibição
-        df_final['Valor_Formatado'] = df_final['Valor'].apply(formatar_brasileiro)
-        
-        # Limitar o tamanho dos labels para melhor visualização
-        df_final['Finalidade_Truncada'] = df_final['Finalidade'].apply(
-            lambda x: (x[:60] + '...') if len(str(x)) > 60 else str(x)
-        )
+    df_final = df_rm.groupby('Finalidade')['Valor'].sum().reset_index()
 
-        fig_final = px.bar(
-            df_final,
-            x='Valor',
-            y='Finalidade_Truncada',
-            color='Finalidade',
-            orientation='h',
-            text=df_final['Valor_Formatado'].apply(lambda x: f"R$ {x}"),
-            labels={'Valor': 'R$', 'Finalidade_Truncada': 'Finalidade'},
-            title="Custo por Finalidade (Top 15)"
-        )
+    fig_final = px.bar(
+        df_final,
+        x='Finalidade',
+        y='Valor',
+        color='Finalidade',
+        text=df_final['Valor'].apply(lambda x: f"R$ {x:,.2f}"),
+        labels={'Valor': 'R$'}
+    )
 
-        fig_final.update_traces(
-            textposition='outside',
-            textfont=dict(size=12, color="black"),
-            cliponaxis=False
-        )
+    fig_final.update_traces(
+        textposition='outside',
+        textfont=dict(size=14, color="black"),
+        cliponaxis=False
+    )
 
-        fig_final.update_layout(
-            xaxis_title="Valor (R$)",
-            yaxis_title="Finalidade",
-            yaxis=dict(categoryorder='total ascending'),
-            hoverlabel=dict(font_size=15),
-            margin=dict(l=150, r=40, t=40, b=40),
-            height=600,
-            showlegend=False
-        )
+    fig_final.update_layout(
+        hoverlabel=dict(font_size=20),
+        xaxis_title="Finalidade",
+        yaxis_title="Valor (R$)",
+        margin=dict(t=40, b=40, l=60, r=40)
+    )
 
-        st.plotly_chart(fig_final, use_container_width=True)
+    st.plotly_chart(fig_final, use_container_width=True)
+
+    st.markdown("### 🔮 Projeção de Custo HOJE (base últimos 5 dias)")
+    ultimos_5_dias = df[(df['Criado'] >= datetime.today() - timedelta(days=5)) & (df['Status'].isin(status_sel))]
+    custo_diario = ultimos_5_dias.groupby(ultimos_5_dias['Criado'].dt.date)['Valor'].sum().reset_index()
+    if not custo_diario.empty:
+        media_diaria = custo_diario['Valor'].mean()
+        st.success(f"🔜 Projeção de custo para HOJE: **R$ {media_diaria:,.2f}**")
     else:
-        st.info("ℹ️ Não há dados para mostrar o gráfico por finalidade.")
+        st.warning("⚠️ Não há dados suficientes nos últimos 5 dias para estimar uma projeção.")
 
-    # Projeção baseada nos últimos 5 dias do período selecionado
-    st.markdown("### 🔮 Projeção de Custo HOJE (base últimos 5 dias do período)")
-    if not df_rm.empty:
-        # Calcular a média dos últimos 5 dias do período selecionado
-        data_max_periodo = df_rm['Criado'].max().date()
-        data_min_projecao = data_max_periodo - timedelta(days=4)
-        
-        ultimos_5_dias = df_rm[(df_rm['Criado'].dt.date >= data_min_projecao) & 
-                              (df_rm['Criado'].dt.date <= data_max_periodo)]
-        
-        if not ultimos_5_dias.empty and len(ultimos_5_dias) > 0:
-            custo_diario = ultimos_5_dias.groupby(ultimos_5_dias['Criado'].dt.date)['Valor'].sum().reset_index()
-            if not custo_diario.empty:
-                media_diaria = custo_diario['Valor'].mean()
-                st.success(f"🔜 Projeção de custo para HOJE (base média dos últimos 5 dias): **R$ {formatar_brasileiro(media_diaria)}**")
-            else:
-                st.warning("⚠️ Não foi possível calcular a média diária.")
-        else:
-            st.warning("⚠️ Não há dados suficientes nos últimos 5 dias do período para estimar uma projeção.")
-    else:
-        st.warning("⚠️ Não há dados disponíveis para fazer projeções.")
+    st.markdown("### 📋 Tabela Detalhada")
+    colunas_desejadas = ['ID', 'Title', 'Valor', 'Finalidade', 'Solicitante', 'Descrição', 'Gestor', 'Nome do favorecido']
+    colunas_existentes = [col for col in colunas_desejadas if col in df_rm.columns]
+    st.dataframe(df_rm[colunas_existentes].style.format({'Valor': 'R$ {:,.2f}'}), use_container_width=True)
 
-    # Tabela detalhada com TODAS as colunas solicitadas
-    st.markdown("### 📋 Tabela Detalhada Completa")
-    if not df_rm.empty:
-        # Definir a ordem das colunas conforme solicitado
-        colunas_ordem = [
-            'ID', 'Title', 'Status', 'Classificação', 'Finalidade',
-            'Descrição', 'Solicitante', 'Nome Motorista', 'Valor',
-            'CPF Motorista', 'Conta Bancaria AG/CC/PIX', 'Gestor',
-            'Ordem de Serviço', 'Criado', 'Banco', 'CPF favorecido',
-            'Modificado', 'Modificado por', 'Placa Cavalo/Carreta',
-            'Empresa', 'Responsável Deposito', 'Agencia',
-            'Conta corrente / poupança', 'Nome Favorecido',
-            'Ano', 'Mes', 'Dia'
-        ]
+    import time
+    import threading
+    import webbrowser           
+
+    def abrir_navegador():
+        time.sleep(2)
+        webbrowser.open("http://localhost:8501")
         
-        # Filtrar apenas as colunas que existem no DataFrame
-        colunas_existentes = [col for col in colunas_ordem if col in df_rm.columns]
-        
-        # Criar uma cópia para exibição
-        df_display = df_rm[colunas_existentes].copy()
-        
-        # Formatar a coluna Valor para exibição
-        if 'Valor' in df_display.columns:
-            df_display['Valor (R$)'] = df_display['Valor'].apply(formatar_brasileiro)
-            # Mover a coluna formatada para depois da coluna Valor original
-            cols = df_display.columns.tolist()
-            valor_idx = cols.index('Valor')
-            cols.insert(valor_idx + 1, 'Valor (R$)')
-            cols.remove('Valor (R$)')
-            df_display = df_display[cols]
-        
-        # Formatar as colunas de data
-        colunas_data = ['Criado', 'Modificado']
-        for col_data in colunas_data:
-            if col_data in df_display.columns:
-                df_display[col_data] = df_display[col_data].dt.strftime('%d/%m/%Y %H:%M')
-        
-        # Mostrar a tabela
-        st.dataframe(df_display, use_container_width=True, height=400)
-        
-        # Botão para download
-        nome_arquivo = f"reuniao_manutencao_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xlsx"
-        st.download_button(
-            "📥 Baixar Relatório (Excel)",
-            data=convert_df(df_rm),
-            file_name=nome_arquivo,
-            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-    else:
-        st.warning("⚠️ Não há dados para mostrar com os filtros aplicados.")
+    threading.Thread(target=abrir_navegador).start()
