@@ -394,7 +394,7 @@ elif menu == "Reunião Manutenção Corporativa":
     data_inicio = st.sidebar.date_input("📅 Data Início", value=ontem)
     data_fim = st.sidebar.date_input("📅 Data Fim", value=ontem)
 
-    gestores_default = ["José Marcos", "Alex de França Silva", "Wesley Duarte Assumpcao", "Renan Francisco Cunha", "Tiago Baldo Ribeiro", "José Witalo"]
+    gestores_default = ["José Marcos", "Alex de França Silva", "Wesley Duarte Assumpcao", "Renan Francisco Cunha", "Tiago Baldo Ribeiro", "José Witalo", "Lucas Martins", "José Carlos de Oliveira", "Mirella da Silva Trindade", "Ruberval Tamarindo da Silva"]
     status_default = ["Pago"]
     classif_default = ["Despesa de Veiculo"]
 
