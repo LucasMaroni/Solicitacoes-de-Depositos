@@ -258,7 +258,7 @@ elif menu == "Análise Detalhada":
 
     status_padrao = ["Pago"]
     classificacao_padrao = ["Despesa de Veiculo"]
-    gestores_padrao = ["José Marcos", "Alex de França Silva", "Wesley Duarte Assumpcao", "Renan Francisco Cunha"]
+    gestores_padrao = ["José Marcos", "Alex de França Silva", "Wesley Duarte Assumpcao", "Renan Francisco Cunha", "José Witalo", "Tiago Baldo Ribeiro", "José Carlos de Oliveira", "Mirella da Silva Trindade", "Lucas Martins"]
 
     status_sel = st.sidebar.multiselect("📌 Status", df['Status'].dropna().unique(),
                                         default=get_default_options(df['Status'].dropna().unique(), status_padrao))
