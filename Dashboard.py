@@ -1,481 +1,626 @@
-import streamlit as st
+import io
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, timedelta
-import locale
-import io
+import streamlit as st
 
 st.set_page_config(page_title="Dashboard de Custos", layout="wide")
 
-@st.cache_data
-def load_data(caminho_arquivo):
+# ----------------------- CONFIGURAÇÕES -----------------------
+ARQUIVO_DADOS = Path(__file__).parent / "Projeto-custo-diário-solicitações-de-depósitos.xlsx"
+
+# Critério de custo de manutenção
+INICIO_ANALISE = date(2026, 1, 1)
+STATUS_PADRAO = ["Pago"]
+CLASSIFICACAO_PADRAO = ["Despesa de Veiculo"]
+GESTORES_PADRAO = [
+    "Dilton Dantas", "José Marcos", "Lucas Martins", "Tiago Baldo Ribeiro", "José Witalo",
+    "Alex de França Silva", "Wesley Duarte Assumpcao", "Flávio Marcante", "Carlos Silva Cipriano",
+]
+
+# Agrupamento das finalidades para a análise (o que não estiver aqui vira "Operacional / outros")
+GRUPOS_FINALIDADE = {
+    "Manutenção Corretiva": "Corretiva",
+    "Manutenção Preventiva": "Preventiva",
+    "Socorro na estrada cavalos": "Socorro e guincho",
+    "Socorro na estrada carretas": "Socorro e guincho",
+    "Guincho Acidentes": "Socorro e guincho",
+    "Guincho Erros da operação": "Socorro e guincho",
+    "Borracharia": "Borracharia e baterias",
+    "Troca baterias": "Borracharia e baterias",
+    "Reformas": "Outros de manutenção",
+    "Manutenção Seminovos": "Outros de manutenção",
+    "Troca de Lâmpada de Veículo": "Outros de manutenção",
+    "lona": "Outros de manutenção",
+    "Dedetização de veiculo": "Outros de manutenção",
+}
+GRUPO_OUTROS = "Operacional / outros"
+ORDEM_GRUPOS = ["Corretiva", "Preventiva", "Socorro e guincho", "Borracharia e baterias",
+                "Outros de manutenção", GRUPO_OUTROS]
+CORES_GRUPOS = dict(zip(ORDEM_GRUPOS, ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#898781"]))
+COR_PRINCIPAL = "#2a78d6"
+
+# Placa antiga (ABC1234) ou Mercosul (ABC1D23), com ou sem hífen/espaço
+PADRAO_PLACA = r"(?<![A-Z])([A-Z]{3})[\s-]?(\d[A-Z0-9]\d{2})(?!\d)"
+
+
+# ----------------------- FUNÇÕES AUXILIARES -----------------------
+def brl(valor):
+    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def pct(valor):
+    return f"{valor:.1f}%".replace(".", ",")
+
+
+def extrair_placa(serie):
+    m = serie.fillna("").astype(str).str.upper().str.extract(PADRAO_PLACA)
+    return m[0] + m[1]
+
+
+@st.cache_data(show_spinner="Carregando base de solicitações...")
+def load_data(caminho_arquivo, modificado_em):
+    # modificado_em só serve para invalidar o cache quando o Excel for substituído
     df = pd.read_excel(caminho_arquivo)
-    df['Criado'] = pd.to_datetime(df['Criado'], errors='coerce')
-    df['Ano'] = df['Criado'].dt.year
-    df['Mes'] = df['Criado'].dt.month
+    df.columns = df.columns.str.strip()
+    for col in ["Status", "Classificação", "Finalidade", "Gestor", "Solicitante"]:
+        df[col] = df[col].str.strip().str.replace(r"\s+", " ", regex=True)
+    df["Criado"] = pd.to_datetime(df["Criado"], errors="coerce")
+    df = df.dropna(subset=["Criado"])
+    df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0)
+    df["Ano"] = df["Criado"].dt.year
+    df["Mês"] = df["Criado"].dt.to_period("M").dt.to_timestamp()
+    df["Grupo"] = df["Finalidade"].map(GRUPOS_FINALIDADE).fillna(GRUPO_OUTROS)
+    df["Placa"] = extrair_placa(df["Placa Cavalo/Carreta"]).fillna(extrair_placa(df["Title"]))
+    df["Tem OS"] = df["Ordem de Serviço"].fillna("").astype(str).str.contains(r"\d")
     return df
-def get_label_color():
-    # Detectar tema escuro no Streamlit
-    theme = st.get_option("theme.base")
-    return "white" if theme == "dark" else "black"
 
 
 def convert_df(df):
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False)
     return output.getvalue()
 
-def get_default_options(available_options, default_list):
-    return [opt for opt in default_list if opt in available_options]
 
-# Carregar dados
+def botao_download(df, prefixo):
+    nome = f"{prefixo}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xlsx"
+    st.download_button("📥 Baixar dados filtrados (Excel)", data=convert_df(df), file_name=nome,
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+def opcoes(df, col):
+    return sorted(df[col].dropna().unique())
+
+
+def padrao(disponiveis, lista):
+    return [o for o in lista if o in disponiveis]
+
+
+def periodos_rapidos():
+    ini_mes = HOJE.replace(day=1)
+    fim_mes_ant = ini_mes - timedelta(days=1)
+    return {
+        f"Desde {INICIO_ANALISE:%d/%m/%Y}": (INICIO_ANALISE, HOJE),
+        "Mês atual": (ini_mes, HOJE),
+        "Mês anterior": (fim_mes_ant.replace(day=1), fim_mes_ant),
+        "Últimos 30 dias": (HOJE - timedelta(days=29), HOJE),
+        "Últimos 90 dias": (HOJE - timedelta(days=89), HOJE),
+        "Ontem": (ONTEM, ONTEM),
+        "Hoje": (HOJE, HOJE),
+        "Personalizado": None,
+    }
+
+
+def restaurar_filtros(pagina):
+    for chave in [k for k in st.session_state if k.startswith(f"{pagina}_")]:
+        del st.session_state[chave]
+
+
+def filtros_sidebar(df, pagina, periodo_padrao, extras=()):
+    """Monta os filtros da barra lateral e devolve um dict com as seleções."""
+    sb = st.sidebar
+    sb.markdown("#### Filtros")
+
+    # Período
+    presets = periodos_rapidos()
+    nomes = list(presets)
+    escolha = sb.selectbox("Período", nomes, index=nomes.index(periodo_padrao), key=f"{pagina}_periodo")
+    if presets[escolha] is None:
+        intervalo = sb.date_input("Intervalo", value=(INICIO_ANALISE, HOJE), format="DD/MM/YYYY",
+                                  key=f"{pagina}_intervalo", label_visibility="collapsed")
+        ini, fim = (intervalo[0], intervalo[-1]) if intervalo else (INICIO_ANALISE, HOJE)
+    else:
+        ini, fim = presets[escolha]
+        sb.caption(f"{ini:%d/%m/%Y} a {fim:%d/%m/%Y}")
+
+    selecao = {}
+
+    # Gestores
+    disp = opcoes(df, "Gestor")
+    selecao["Gestor"] = sb.multiselect("Gestores", disp, default=padrao(disp, GESTORES_PADRAO),
+                                       placeholder="Todos os gestores", key=f"{pagina}_Gestor")
+    sb.caption(f"{len(selecao['Gestor']) or len(disp)} de {len(disp)} gestores")
+
+    # Filtros adicionais da página
+    rotulos = {"Finalidade": ("Finalidade", "Todas as finalidades"),
+               "Solicitante": ("Solicitante", "Todos os solicitantes")}
+    for col in extras:
+        rotulo, vazio = rotulos[col]
+        selecao[col] = sb.multiselect(rotulo, opcoes(df, col), placeholder=vazio, key=f"{pagina}_{col}")
+
+    # Critério de custo (normalmente fixo)
+    with sb.expander("Critério de custo", expanded=False):
+        for col, lista_padrao in [("Status", STATUS_PADRAO), ("Classificação", CLASSIFICACAO_PADRAO)]:
+            disp = opcoes(df, col)
+            selecao[col] = st.multiselect(col, disp, default=padrao(disp, lista_padrao),
+                                          placeholder="Todos", key=f"{pagina}_{col}")
+
+    sb.button("Restaurar filtros padrão", on_click=restaurar_filtros, args=(pagina,),
+              width="stretch", key=f"{pagina}_restaurar")
+    return {"ini": ini, "fim": fim, "sel": selecao}
+
+
+def aplicar_filtros(df, f, usar_datas=True, usar_status=True):
+    mask = pd.Series(True, index=df.index)
+    if usar_datas:
+        mask &= df["Criado"].dt.date.between(f["ini"], f["fim"])
+    for col, valores in f["sel"].items():
+        if valores and (usar_status or col != "Status"):
+            mask &= df[col].isin(valores)
+    return df[mask]
+
+
+def resumo_filtros(f):
+    with st.expander("📌 Filtros aplicados", expanded=False):
+        st.write(f"**Período:** {f['ini']:%d/%m/%Y} até {f['fim']:%d/%m/%Y}")
+        for col, valores in f["sel"].items():
+            st.write(f"**{col}:** {', '.join(valores) if valores else 'Todos'}")
+
+
+def layout_padrao(fig, titulo=None, altura=None):
+    fig.update_layout(
+        title=titulo, separators=",.", hoverlabel=dict(font_size=14),
+        legend_title_text="", margin=dict(l=10, r=10, t=60 if titulo else 20, b=10),
+    )
+    if altura:
+        fig.update_layout(height=altura)
+    return fig
+
+
+def mostrar(fig):
+    st.plotly_chart(fig, width="stretch")
+
+
+def barras_horizontais(df_agg, categoria, titulo=None, altura=None, total=None):
+    """Barra horizontal ordenada com rótulo 'R$ valor (x%)'."""
+    df_agg = df_agg.sort_values("Valor")
+    base = total if total else df_agg["Valor"].sum()
+    rotulos = df_agg["Valor"].apply(lambda v: f"{brl(v)} ({pct(v / base * 100)})" if base else brl(v))
+    fig = px.bar(df_agg, x="Valor", y=categoria, orientation="h", text=rotulos,
+                 color_discrete_sequence=[COR_PRINCIPAL])
+    fig.update_traces(textposition="outside", cliponaxis=False,
+                      hovertemplate="<b>%{y}</b><br>R$ %{x:,.2f}<extra></extra>")
+    fig.update_xaxes(title="Valor (R$)", range=[0, df_agg["Valor"].max() * 1.35])
+    fig.update_yaxes(title="")
+    return layout_padrao(fig, titulo, altura or max(300, 32 * len(df_agg) + 80))
+
+
+JANELA_PROJECAO = 30   # dias fechados usados como base (melhor resultado no backtest jan–set/2026)
+MESES_CALIBRACAO = 12  # meses anteriores usados para medir o erro real da projeção (faixa provável)
+
+
+def custo_diario(d):
+    return d.groupby(d["Criado"].dt.date)["Valor"].sum()
+
+
+def serie_diaria(diario, ini, fim):
+    """Custo por dia entre ini e fim, com zero nos dias sem lançamento."""
+    dias = pd.date_range(ini, fim).date
+    return pd.Series(diario.reindex(dias, fill_value=0).values, index=dias, dtype=float)
+
+
+def eh_dia_util(dia):
+    return dia.weekday() < 5
+
+
+def historico_ritmo(diario, hoje):
+    """Custo diário dos últimos dias fechados, separado em dias úteis (True) e fins de semana (False)."""
+    hist = serie_diaria(diario, hoje - timedelta(days=JANELA_PROJECAO), hoje - timedelta(days=1))
+    util = pd.Series([eh_dia_util(x) for x in hist.index], index=hist.index)
+    return {True: hist[util], False: hist[~util]}
+
+
+def projetar_aberto(diario, hoje, fim_mes):
+    """Valor esperado de hoje até o fim do mês, pela média de cada tipo de dia."""
+    medias = {k: v.mean() for k, v in historico_ritmo(diario, hoje).items()}
+    return sum(medias[eh_dia_util(x)] for x in pd.date_range(hoje, fim_mes).date)
+
+
+def faixa_empirica(diario, hoje):
+    """Refaz a projeção nos meses anteriores, no mesmo ponto do mês (±2 dias), e mede quanto o
+    realizado ficou acima/abaixo do projetado. Devolve os percentis 10 e 90 dessa razão (faixa de 80%)."""
+    if diario.empty:
+        return None
+    primeiro_lancamento = min(diario.index)
+    razoes = []
+    ini_atual = pd.Timestamp(hoje.replace(day=1))
+    for k in range(1, MESES_CALIBRACAO + 1):
+        ini = (ini_atual - pd.DateOffset(months=k)).date()
+        fim = (pd.Timestamp(ini) + pd.offsets.MonthEnd(0)).date()
+        for desloc in range(-2, 3):
+            corte = ini.replace(day=min(max(hoje.day + desloc, 1), fim.day))
+            if corte - timedelta(days=JANELA_PROJECAO) < primeiro_lancamento:
+                continue  # sem histórico completo para projetar naquele ponto
+            previsto = projetar_aberto(diario, corte, fim)
+            if previsto > 0:
+                razoes.append(serie_diaria(diario, corte, fim).sum() / previsto)
+    if len(razoes) < 15:
+        return None
+    return pd.Series(razoes).quantile(0.10), pd.Series(razoes).quantile(0.90)
+
+
+def projetar_mes(d, hoje):
+    """Projeção do custo do mês corrente.
+
+    - Dias fechados (dia 1 até ontem): valor realizado.
+    - Hoje (dia em andamento): o maior entre o já lançado e a média esperada para o dia.
+    - Dias restantes: média diária dos últimos 30 dias fechados, separada em dias úteis e fins de semana.
+    - Faixa provável (80%): erro real que essa mesma projeção teve nos 12 meses anteriores,
+      no mesmo ponto do mês, aplicado sobre a parte ainda não realizada.
+    """
+    diario = custo_diario(d)
+    ini_mes = hoje.replace(day=1)
+    fim_mes = (pd.Timestamp(ini_mes) + pd.offsets.MonthEnd(0)).date()
+    medias = {k: v.mean() for k, v in historico_ritmo(diario, hoje).items()}
+
+    fechado = serie_diaria(diario, ini_mes, hoje - timedelta(days=1)) if hoje > ini_mes else pd.Series(dtype=float)
+    lancado_hoje = serie_diaria(diario, hoje, hoje).sum()
+    esperado_hoje = max(lancado_hoje, medias[eh_dia_util(hoje)])
+    futuros = pd.date_range(hoje + timedelta(days=1), fim_mes).date
+    proj = pd.Series([medias[eh_dia_util(x)] for x in futuros], index=futuros, dtype=float)
+
+    aberto = esperado_hoje + proj.sum()
+    realizado = fechado.sum() + lancado_hoje
+    total = fechado.sum() + aberto
+    q = faixa_empirica(diario, hoje)
+    faixa = (max(realizado, fechado.sum() + aberto * q[0]), fechado.sum() + aberto * q[1]) if q else None
+
+    grafico = pd.concat([
+        pd.DataFrame({"Data": list(fechado.index) + [hoje], "Valor": list(fechado.values) + [lancado_hoje],
+                      "Tipo": "Realizado"}),
+        pd.DataFrame({"Data": [hoje] + list(proj.index), "Valor": [esperado_hoje - lancado_hoje] + list(proj.values),
+                      "Tipo": "Projetado"}),
+    ], ignore_index=True)
+    return {"grafico": grafico, "total": total, "realizado": realizado, "faixa": faixa,
+            "media_util": medias[True], "media_fds": medias[False]}
+
+
+def grafico_projecao(grafico):
+    fig = px.bar(grafico, x="Data", y="Valor", color="Tipo",
+                 color_discrete_map={"Realizado": COR_PRINCIPAL, "Projetado": "#86b6ef"})
+    fig.update_traces(hovertemplate="%{x|%d/%m/%Y}<br>R$ %{y:,.2f}<extra>%{fullData.name}</extra>",
+                      marker_line_width=0)
+    fig.update_xaxes(title="", tickformat="%d/%m", dtick=86400000 * 2)
+    fig.update_yaxes(title="Valor (R$)")
+    fig.update_layout(barmode="stack")
+    return layout_padrao(fig, "Custo diário no mês atual — realizado e projetado")
+
+
+# ----------------------- CARREGAR DADOS -----------------------
 try:
-    df = load_data("Projeto-custo-diário-solicitações-de-depósitos.xlsx")
+    df = load_data(str(ARQUIVO_DADOS), ARQUIVO_DADOS.stat().st_mtime)
 except Exception as e:
     st.error(f"Erro ao carregar o arquivo: {e}")
     st.stop()
 
-# Menu lateral
-menu = st.sidebar.radio("📌 Menu", [
-    "Dashboard Geral",
-    "Análise Detalhada",
-    "Reunião Manutenção Corporativa"
-])
+HOJE = date.today()
+ONTEM = HOJE - timedelta(days=1)
 
-import numpy as np
-def gerar_projecao_mes_atual(df):
-    hoje = datetime.today().date()
-    primeiro_dia = hoje.replace(day=1)
-    ultimo_dia = (primeiro_dia + pd.offsets.MonthEnd(0)).date()
+st.sidebar.markdown("## Custos de Manutenção")
+st.sidebar.caption(f"Base atualizada em {df['Criado'].max():%d/%m/%Y %H:%M} · "
+                   f"{len(df):,} solicitações".replace(",", "."))
+menu = st.sidebar.radio("Página", ["Custos da Manutenção", "Análise Detalhada", "Reunião Manutenção Corporativa"],
+                        key="menu")
+st.sidebar.divider()
 
-    # Filtrar apenas os dados do mês atual
-    df_mes = df[(df['Criado'].dt.date >= primeiro_dia) & (df['Criado'].dt.date <= hoje)]
 
-    if df_mes.empty:
-        # Retorna vazio para evitar erro ao agrupar
-        return pd.DataFrame(columns=['Data', 'Valor', 'Tipo']), 0, 0
+# ----------------------- CUSTOS DA MANUTENÇÃO -----------------------
+def pagina_manutencao():
+    st.title("🔧 Análise de Custos da Manutenção")
+    st.caption("Custo de manutenção = Status **Pago** · Classificação **Despesa de Veiculo** · gestores selecionados.")
 
-    # Realizado por dia
-    realizado = df_mes.groupby(df_mes['Criado'].dt.date)['Valor'].sum().reset_index()
-    realizado.columns = ['Data', 'Valor']
-    realizado['Tipo'] = 'Realizado'
+    f = filtros_sidebar(df, "man", f"Desde {INICIO_ANALISE:%d/%m/%Y}", extras=("Finalidade",))
+    dfm = aplicar_filtros(df, f)
+    resumo_filtros(f)
+    if dfm.empty:
+        st.warning("Nenhum registro encontrado para os filtros selecionados.")
+        return
 
-    # Estatísticas para projeção
-    media_uteis = realizado[realizado['Data'].apply(lambda d: d.weekday() < 5)]['Valor'].mean()
-    media_fds = realizado[realizado['Data'].apply(lambda d: d.weekday() >= 5)]['Valor'].mean()
+    # --- KPIs ---
+    total = dfm["Valor"].sum()
+    qtd = len(dfm)
+    meses = dfm["Mês"].nunique()
+    corr_prev = dfm[dfm["Grupo"].isin(["Corretiva", "Preventiva"])]["Valor"].sum()
+    perc_prev = dfm.loc[dfm["Grupo"] == "Preventiva", "Valor"].sum() / corr_prev * 100 if corr_prev else 0
+    perc_emerg = dfm.loc[dfm["Grupo"] == "Socorro e guincho", "Valor"].sum() / total * 100 if total else 0
 
-    if np.isnan(media_fds):
-        media_fds = media_uteis * 0.5  # fallback
+    # Mês atual x mesmo intervalo do mês anterior, comparando só dias fechados (hoje ainda está em andamento)
+    sem_data = aplicar_filtros(df, f, usar_datas=False)
+    ini_mes = HOJE.replace(day=1)
+    ini_ant = (pd.Timestamp(ini_mes) - pd.DateOffset(months=1)).date()
+    fim_ant = min(ini_ant + (ONTEM - ini_mes), ini_mes - timedelta(days=1))
+    datas = sem_data["Criado"].dt.date
+    mes_atual = sem_data.loc[datas.between(ini_mes, HOJE), "Valor"].sum()
+    fechado_atual = sem_data.loc[datas.between(ini_mes, ONTEM), "Valor"].sum()
+    mes_ant = sem_data.loc[datas.between(ini_ant, fim_ant), "Valor"].sum()
+    variacao = (fechado_atual / mes_ant - 1) * 100 if mes_ant and HOJE.day > 1 else None
+    proj = projetar_mes(sem_data, HOJE)
+    faixa = f"{brl(proj['faixa'][0])} a {brl(proj['faixa'][1])}" if proj["faixa"] else "histórico insuficiente"
 
-    # Dias futuros
-    datas_futuras = pd.date_range(hoje + timedelta(days=1), ultimo_dia).date
+    c = st.columns(4)
+    c[0].metric("💰 Custo total no período", brl(total))
+    c[1].metric("📝 Solicitações pagas", f"{qtd:,}".replace(",", "."))
+    c[2].metric("🧾 Ticket médio", brl(total / qtd))
+    c[3].metric("📅 Média mensal", brl(total / meses), help="Custo total ÷ meses com lançamento no período")
+    c = st.columns(4)
+    c[0].metric(f"📆 Mês atual (até {HOJE:%d/%m})", brl(mes_atual),
+                delta=f"{pct(variacao)} vs 01–{fim_ant:%d/%m}" if variacao is not None else None,
+                delta_color="inverse",
+                help=f"Variação dos dias fechados (01/{HOJE:%m} a {ONTEM:%d/%m}) contra o mesmo intervalo do mês anterior")
+    c[1].metric("🔮 Projeção do mês", brl(proj["total"]),
+                help=f"Faixa provável (80%): {faixa}. Realizado + média dos últimos 30 dias "
+                     f"({brl(proj['media_util'])}/dia útil, {brl(proj['media_fds'])}/dia de fim de semana)")
+    c[2].metric("🛠️ Preventiva / (Corretiva + Preventiva)", pct(perc_prev),
+                help="Quanto maior, menos reativa é a manutenção")
+    c[3].metric("🚨 Socorro e guincho", pct(perc_emerg), help="% do custo total gasto com socorro e guincho")
 
-    previsao = []
-    for data in datas_futuras:
-        if data.weekday() >= 5:
-            valor = media_fds * np.random.uniform(0.9, 1.1)
+    # --- Evolução mensal por grupo ---
+    st.markdown("### 📈 Evolução mensal por grupo de finalidade")
+    mensal = dfm.groupby(["Mês", "Grupo"])["Valor"].sum().reset_index()
+    totais = dfm.groupby("Mês")["Valor"].sum().reset_index()
+    fig = px.bar(mensal, x="Mês", y="Valor", color="Grupo", category_orders={"Grupo": ORDEM_GRUPOS},
+                 color_discrete_map=CORES_GRUPOS)
+    fig.update_traces(hovertemplate="%{x|%m/%Y}<br>R$ %{y:,.2f}<extra>%{fullData.name}</extra>",
+                      marker_line_width=1.5, marker_line_color="rgba(0,0,0,0)")
+    fig.add_scatter(x=totais["Mês"], y=totais["Valor"], mode="text", text=totais["Valor"].apply(brl),
+                    textposition="top center", showlegend=False, hoverinfo="skip")
+    fig.update_xaxes(title="", dtick="M1", tickformat="%m/%Y")
+    fig.update_yaxes(title="Valor (R$)", range=[0, totais["Valor"].max() * 1.15])
+    mostrar(layout_padrao(fig, altura=450))
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("### 🎯 Custo por finalidade")
+        por_fin = dfm.groupby("Finalidade")["Valor"].sum().reset_index()
+        mostrar(barras_horizontais(por_fin, "Finalidade"))
+    with col2:
+        st.markdown("### 🛠️ Preventiva × Corretiva")
+        cp = dfm[dfm["Grupo"].isin(["Corretiva", "Preventiva"])].pivot_table(
+            index="Mês", columns="Grupo", values="Valor", aggfunc="sum", fill_value=0)
+        if {"Corretiva", "Preventiva"} <= set(cp.columns):
+            cp["% Preventiva"] = cp["Preventiva"] / (cp["Corretiva"] + cp["Preventiva"]) * 100
+            fig = px.line(cp.reset_index(), x="Mês", y="% Preventiva", markers=True,
+                          text=cp["% Preventiva"].apply(pct).values, color_discrete_sequence=[CORES_GRUPOS["Preventiva"]])
+            fig.update_traces(textposition="top center", line_width=2, marker_size=8,
+                              hovertemplate="%{x|%m/%Y}<br>%{y:.1f}% preventiva<extra></extra>")
+            fig.update_xaxes(title="", dtick="M1", tickformat="%m/%Y")
+            fig.update_yaxes(title="% do custo de manutenção preventiva", range=[0, max(cp["% Preventiva"].max() * 1.3, 10)])
+            mostrar(layout_padrao(fig, "Participação da preventiva no custo (corretiva + preventiva)"))
         else:
-            valor = media_uteis * np.random.uniform(0.9, 1.1)
-        previsao.append({'Data': data, 'Valor': valor, 'Tipo': 'Projetado'})
+            st.info("Sem lançamentos de corretiva e preventiva no período.")
 
-    df_proj = pd.DataFrame(previsao)
-    df_resultado = pd.concat([realizado, df_proj], ignore_index=True)
+        st.markdown("### 🚨 Socorro e guincho")
+        emerg = dfm[dfm["Grupo"] == "Socorro e guincho"].groupby("Finalidade")["Valor"].sum().reset_index()
+        if emerg.empty:
+            st.info("Sem lançamentos de socorro ou guincho no período.")
+        else:
+            mostrar(barras_horizontais(emerg, "Finalidade"))
 
-    total_esperado = df_resultado['Valor'].sum()
-    return df_resultado, total_esperado, media_uteis
+    # --- Gestor x mês ---
+    st.markdown("### 👔 Custo por gestor e mês")
+    mapa = dfm.pivot_table(index="Gestor", columns="Mês", values="Valor", aggfunc="sum", fill_value=0)
+    mapa = mapa.loc[mapa.sum(axis=1).sort_values(ascending=False).index]
+    mapa.columns = [c.strftime("%m/%Y") for c in mapa.columns]
+    fig = px.imshow(mapa, aspect="auto", color_continuous_scale=["#f0f6fd", "#86b6ef", "#2a78d6", "#0d366b"])
+    fig.update_traces(texttemplate="%{z:,.0f}", hovertemplate="<b>%{y}</b><br>%{x}<br>R$ %{z:,.2f}<extra></extra>",
+                      xgap=2, ygap=2)
+    fig.update_xaxes(title="", side="top")
+    fig.update_yaxes(title="")
+    fig.update_coloraxes(colorbar_title="R$")
+    mostrar(layout_padrao(fig, altura=max(300, 45 * len(mapa) + 100)))
 
-# ----------------------- DASHBOARD GERAL -----------------------
-if menu == "Dashboard Geral":
-    st.sidebar.header("🧮 Filtros")
+    # --- Placas ---
+    st.markdown("### 🚛 Veículos com maior custo")
+    com_placa = dfm.dropna(subset=["Placa"])
+    st.caption(f"Placa identificada em {pct(len(com_placa) / qtd * 100)} das solicitações "
+               "(extraída do campo Placa ou do título; quando há várias, considera a primeira — normalmente o cavalo).")
+    if not com_placa.empty:
+        placas = com_placa.groupby("Placa").agg(
+            Qtd=("Valor", "size"), Valor=("Valor", "sum"),
+            Corretivas=("Grupo", lambda s: (s == "Corretiva").sum()),
+            Socorros=("Grupo", lambda s: (s == "Socorro e guincho").sum()),
+            Primeira=("Criado", "min"), Última=("Criado", "max"),
+        ).reset_index()
+        placas["Intervalo médio (dias)"] = ((placas["Última"] - placas["Primeira"]).dt.days /
+                                           (placas["Qtd"] - 1).where(placas["Qtd"] > 1)).round(1)
+        placas = placas.sort_values("Valor", ascending=False)
 
-    data_inicio = st.sidebar.date_input("📅 Data Início", value=pd.to_datetime("2025-01-01").date())
-    data_fim = st.sidebar.date_input("📅 Data Fim", value=datetime.today().date())
+        col1, col2 = st.columns([2, 3])
+        with col1:
+            mostrar(barras_horizontais(placas.head(15)[["Placa", "Valor"]], "Placa", "Top 15 placas por custo",
+                                       total=com_placa["Valor"].sum()))
+        with col2:
+            st.markdown("**Reincidência** — placas com 3 ou mais solicitações no período")
+            reinc = placas[placas["Qtd"] >= 3].sort_values(["Qtd", "Valor"], ascending=False)
+            st.dataframe(reinc, hide_index=True, width="stretch", height=480, column_config={
+                "Valor": st.column_config.NumberColumn("Valor (R$)", format="localized"),
+                "Primeira": st.column_config.DatetimeColumn(format="DD/MM/YYYY"),
+                "Última": st.column_config.DatetimeColumn(format="DD/MM/YYYY"),
+            })
 
-    gestores_padrao = [
-        "José Marcos", "Alex de França Silva",
-        "Wesley Duarte Assumpcao", "Renan Francisco Cunha",
-        "José Witalo", "Tiago Baldo Ribeiro", "José Carlos de Oliveira", "Mirella da Silva Trindade", "Lucas Martins"
-    ]
-    status_padrao = ["Pago"]
-    classificacao_padrao = ["Despesa de veículo"]
+    # --- Ticket médio por finalidade ---
+    st.markdown("### 🧾 Ticket médio por finalidade")
+    ultimo_mes = dfm["Mês"].max()
+    tk = dfm.groupby("Finalidade").agg(Qtd=("Valor", "size"), Valor=("Valor", "sum"),
+                                       Maior=("Valor", "max")).reset_index()
+    tk["% do total"] = tk["Valor"] / total * 100
+    tk["Ticket médio"] = tk["Valor"] / tk["Qtd"]
+    ant = dfm[dfm["Mês"] < ultimo_mes].groupby("Finalidade")["Valor"].mean().rename("Ticket meses anteriores")
+    atual = dfm[dfm["Mês"] == ultimo_mes].groupby("Finalidade")["Valor"].mean().rename(f"Ticket {ultimo_mes:%m/%Y}")
+    tk = tk.join(ant, on="Finalidade").join(atual, on="Finalidade")
+    tk["Variação %"] = (tk[f"Ticket {ultimo_mes:%m/%Y}"] / tk["Ticket meses anteriores"] - 1) * 100
+    tk = tk.sort_values("Valor", ascending=False)
+    moeda = st.column_config.NumberColumn(format="localized")
+    st.dataframe(tk, hide_index=True, width="stretch", column_config={
+        "Valor": st.column_config.NumberColumn("Valor (R$)", format="localized"),
+        "Maior": st.column_config.NumberColumn("Maior valor (R$)", format="localized"),
+        "% do total": st.column_config.NumberColumn(format="%.1f%%"),
+        "Ticket médio": moeda, "Ticket meses anteriores": moeda, f"Ticket {ultimo_mes:%m/%Y}": moeda,
+        "Variação %": st.column_config.NumberColumn(format="%+.1f%%"),
+    })
 
-    solicitante_sel = st.sidebar.multiselect("🙋‍♂️ Solicitante", df['Solicitante'].dropna().unique())
-    status_sel = st.sidebar.multiselect("📌 Status", df['Status'].dropna().unique(), default=get_default_options(df['Status'].dropna().unique(), status_padrao))
-    gestor_sel = st.sidebar.multiselect("👔 Gestor", df['Gestor'].dropna().unique(), default=get_default_options(df['Gestor'].dropna().unique(), gestores_padrao))
-    classif_sel = st.sidebar.multiselect("🏷️ Classificação", df['Classificação'].dropna().unique(), default=get_default_options(df['Classificação'].dropna().unique(), classificacao_padrao))
-    finalidade_sel = st.sidebar.multiselect("🎯 Finalidade", df['Finalidade'].dropna().unique())
+    # --- Conformidade ---
+    st.markdown("### ✅ Conformidade do processo por gestor")
+    st.caption("Taxa de recusa = recusadas ÷ (pagas + recusadas), mesmos filtros exceto Status.")
+    todos_status = aplicar_filtros(df, f, usar_status=False)
+    conf = dfm.groupby("Gestor").agg(Pagas=("Valor", "size"), Valor=("Valor", "sum"),
+                                     sem_os=("Tem OS", lambda s: (~s).mean() * 100)).reset_index()
+    recusadas = todos_status[todos_status["Status"] == "Recusado"].groupby("Gestor").size().rename("Recusadas")
+    conf = conf.join(recusadas, on="Gestor").fillna({"Recusadas": 0})
+    conf["Taxa de recusa"] = conf["Recusadas"] / (conf["Pagas"] + conf["Recusadas"]) * 100
+    conf = conf.rename(columns={"sem_os": "% sem OS"}).sort_values("Valor", ascending=False)
+    st.dataframe(conf, hide_index=True, width="stretch", column_config={
+        "Valor": st.column_config.NumberColumn("Valor (R$)", format="localized"),
+        "% sem OS": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100),
+        "Recusadas": st.column_config.NumberColumn(format="%d"),
+        "Taxa de recusa": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100),
+    })
 
-    df_filtrado = df.copy()
-    df_filtrado = df_filtrado[df_filtrado['Criado'].dt.date.between(data_inicio, data_fim)]
-    if solicitante_sel:
-        df_filtrado = df_filtrado[df_filtrado['Solicitante'].isin(solicitante_sel)]
-    if status_sel:
-        df_filtrado = df_filtrado[df_filtrado['Status'].isin(status_sel)]
-    if gestor_sel:
-        df_filtrado = df_filtrado[df_filtrado['Gestor'].isin(gestor_sel)]
-    if classif_sel:
-        df_filtrado = df_filtrado[df_filtrado['Classificação'].isin(classif_sel)]
-    if finalidade_sel:
-        df_filtrado = df_filtrado[df_filtrado['Finalidade'].isin(finalidade_sel)]
+    # --- Projeção ---
+    st.markdown("### 🔮 Projeção do mês atual")
+    mostrar(grafico_projecao(proj["grafico"]))
+    st.success(f"📌 Estimativa de custo de manutenção até o fim do mês: **{brl(proj['total'])}** "
+               f"(faixa provável: {faixa})")
+    st.caption(f"Como é calculado: dias fechados entram pelo valor realizado; hoje entra pelo maior valor entre "
+               f"o já lançado e a média esperada; os dias restantes recebem a média dos últimos {JANELA_PROJECAO} "
+               f"dias fechados ({brl(proj['media_util'])} por dia útil e {brl(proj['media_fds'])} por dia de fim de semana). "
+               f"A faixa provável (80%) vem do erro real que esta mesma projeção teve nos {MESES_CALIBRACAO} meses "
+               "anteriores, no mesmo ponto do mês.")
 
-    st.title("📊 Relatório de custos gerais | Solicitações de Depósitos")
-    with st.expander("📌 Filtros aplicados", expanded=False):
-        st.write(f"**Período:** {data_inicio} até {data_fim}")
-        st.write(f"**Solicitante:** {solicitante_sel if solicitante_sel else 'Todos'}")
-        st.write(f"**Status:** {status_sel if status_sel else 'Todos'}")
-        st.write(f"**Gestor:** {gestor_sel if gestor_sel else 'Todos'}")
-        st.write(f"**Classificação:** {classif_sel if classif_sel else 'Todos'}")
-        st.write(f"**Finalidade:** {finalidade_sel if finalidade_sel else 'Todos'}")
+    # --- Detalhe ---
+    st.markdown("### 📋 Solicitações")
+    colunas = ["ID", "Criado", "Gestor", "Solicitante", "Finalidade", "Grupo", "Placa", "Valor",
+               "Title", "Descrição", "Ordem de Serviço", "Nome Favorecido"]
+    detalhe = dfm[colunas].sort_values("Criado", ascending=False)
+    st.dataframe(detalhe, hide_index=True, width="stretch", column_config={
+        "Valor": st.column_config.NumberColumn("Valor (R$)", format="localized"),
+        "Criado": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm"),
+        "ID": st.column_config.NumberColumn(format="%d"),
+    })
+    botao_download(detalhe, "custos_manutencao")
 
-    custo_total = df_filtrado['Valor'].sum()
-    qtd_registros = df_filtrado.shape[0]
-    dias_distintos = df_filtrado['Criado'].dt.date.nunique()
-    custo_medio_diario = custo_total / dias_distintos if dias_distintos else 0
-    custo_medio_por_registro = custo_total / qtd_registros if qtd_registros else 0
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("💰 Custo Total", f"R$ {custo_total:,.2f}")
-    col2.metric("📅 Custo Médio Diário", f"R$ {custo_medio_diario:,.2f}")
-    col3.metric("📄 Custo Médio por Registro", f"R$ {custo_medio_por_registro:,.2f}")
-    col4.metric("📝 Qtd. Registros", qtd_registros)
-
-    st.markdown("### 📈 Projeção de Custos do Mês Atual")
-
-    df_proj_mes, total_projetado, media_diaria_proj = gerar_projecao_mes_atual(df_filtrado)
-
-    fig_proj_mes = px.bar(df_proj_mes, x='Data', y='Valor', color='Tipo',
-                          color_discrete_map={'Realizado': 'blue', 'Projetado': 'green'},
-                          labels={'Valor': 'R$', 'Data': 'Data'},
-                          title="Projeção de Custos Diários no Mês Atual")
-
-    fig_proj_mes.update_layout(
-        barmode='group',
-        xaxis_title="Data",
-        yaxis_title="Valor (R$)",
-        hoverlabel=dict(font_size=25),
-        showlegend=True
-    )
-
-    fig_proj_mes.update_traces(
-    texttemplate='R$ %{y:,.2f}',
-    textposition='outside',
-    textangle=0,
-    cliponaxis=False,
-    textfont=dict(size=40, color='black')  # 👈 AQUI
-)
-
-
-    st.plotly_chart(fig_proj_mes, use_container_width=True)
-
-    st.success(f"📌 Estimativa de custo total até o fim do mês: **R$ {total_projetado:,.2f}**")
-
-    df_temporal = df_filtrado.groupby(df_filtrado['Criado'].dt.to_period('M')).agg({'Valor': 'sum'}).reset_index()
-    df_temporal['Criado'] = df_temporal['Criado'].astype(str)
-
-    fig_temporal = px.line(
-        df_temporal,
-        x='Criado',
-        y='Valor',
-        markers=True,
-        text=df_temporal['Valor'].apply(lambda x: f"R$ {x:,.2f}"),
-        title="Custo por Mês",
-        labels={'Valor': 'R$', 'Criado': 'Mês'}
-    )
-
-    fig_temporal.update_traces(
-        textposition='top center',  # ✅ posição do valor acima do ponto
-        textfont=dict(size=14, color='black'),
-        mode='lines+markers+text'  # ✅ exibe linha + ponto + texto
-    )
-
-    fig_temporal.update_layout(
-        hoverlabel=dict(font_size=20),
-        xaxis_title="Mês",
-        yaxis_title="Valor (R$)"
-    )
-
-    st.plotly_chart(fig_temporal, use_container_width=True)
-
-
-
-
-    st.markdown("### 🎯 Custo por Finalidade")
-
-    # Agrupar os dados por finalidade
-    df_finalidade = df_filtrado.groupby('Finalidade')['Valor'].sum().reset_index()
-
-    # Criar gráfico horizontal com os valores fixos ao final da barra
-    fig_finalidade = px.bar(
-    df_finalidade,
-    x='Valor',
-    y='Finalidade',
-    color='Finalidade',
-    orientation='h',
-    text=df_finalidade['Valor'].apply(lambda x: f"R$ {x:,.2f}"),  # ✅ Correção AQUI
-    labels={'Valor': 'R$', 'Finalidade': 'Finalidade'}
-    )
-
-    fig_finalidade.update_traces(
-        textposition='outside',
-        textfont=dict(size=16, color="black"),
-        cliponaxis=False
-    )
-
-    # Ajustar layout
-    fig_finalidade.update_layout(
-        xaxis_title="Valor (R$)",
-        yaxis_title="Finalidade",
-        yaxis=dict(categoryorder='total ascending'),
-        hoverlabel=dict(font_size=15),
-        margin=dict(l=120, r=40, t=40, b=40)  # aumenta margem esquerda para texto
-    )
-
-    # Exibir gráfico
-    st.plotly_chart(fig_finalidade, use_container_width=True)
-    
-
-    st.markdown("### 🏷️ Custo por Classificação")
-    df_classificacao = df_filtrado.groupby('Classificação')['Valor'].sum().reset_index()
-    fig_classificacao = px.pie(df_classificacao, names='Classificação', values='Valor', hole=0.3)
-    fig_classificacao.update_traces(
-        hovertemplate='%{label}<br>R$ %{value:,.2f}<extra></extra>',
-        textinfo='label+percent')
-    fig_classificacao.update_layout(hoverlabel=dict(font_size=20))
-
-    st.plotly_chart(fig_classificacao, use_container_width=True)
-
-    nome_arquivo = f"dados_filtrados_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xlsx"
-    st.download_button("📥 Baixar dados filtrados (Excel)", data=convert_df(df_filtrado), file_name=nome_arquivo, mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 # ----------------------- ANÁLISE DETALHADA -----------------------
-elif menu == "Análise Detalhada":
+def pagina_detalhada():
     st.title("👤 Análise por Solicitante")
+    f = filtros_sidebar(df, "det", "Ontem", extras=("Finalidade",))
+    resumo_filtros(f)
+    df_filtrado = aplicar_filtros(df, f)
 
-    ontem = (datetime.today() - timedelta(days=1)).date()
-
-    data_inicio = st.sidebar.date_input("📅 Data Início", value=ontem)
-    data_fim = st.sidebar.date_input("📅 Data Fim", value=ontem)
-
-    status_padrao = ["Pago"]
-    classificacao_padrao = ["Despesa de Veiculo"]
-    gestores_padrao = ["José Marcos", "Alex de França Silva", "Wesley Duarte Assumpcao", "Renan Francisco Cunha", "José Witalo", "Tiago Baldo Ribeiro", "José Carlos de Oliveira", "Mirella da Silva Trindade", "Lucas Martins"]
-
-    status_sel = st.sidebar.multiselect("📌 Status", df['Status'].dropna().unique(),
-                                        default=get_default_options(df['Status'].dropna().unique(), status_padrao))
-    classif_sel = st.sidebar.multiselect("🏷️ Classificação", df['Classificação'].dropna().unique(),
-                                         default=get_default_options(df['Classificação'].dropna().unique(), classificacao_padrao))
-    gestor_sel = st.sidebar.multiselect("👔 Gestor", df['Gestor'].dropna().unique(),
-                                        default=get_default_options(df['Gestor'].dropna().unique(), gestores_padrao))
-
-    df_filtrado = df.copy()
-    df_filtrado = df_filtrado[df_filtrado['Criado'].dt.date.between(data_inicio, data_fim)]
-    if status_sel:
-        df_filtrado = df_filtrado[df_filtrado['Status'].isin(status_sel)]
-    if classif_sel:
-        df_filtrado = df_filtrado[df_filtrado['Classificação'].isin(classif_sel)]
-    if gestor_sel:
-        df_filtrado = df_filtrado[df_filtrado['Gestor'].isin(gestor_sel)]
-
-    solicitantes_disponiveis = sorted(df_filtrado['Solicitante'].dropna().unique())
-    solicitante_select = st.selectbox("🙋‍♂️ Selecione um Solicitante", options=["Todos"] + solicitantes_disponiveis)
-
-    # Aplicar filtro extra se um solicitante for escolhido
-    if solicitante_select != "Todos":
-        df_filtrado = df_filtrado[df_filtrado['Solicitante'] == solicitante_select]
-
-        # Cálculos do solicitante
-        custo_total = df_filtrado['Valor'].sum()
-        qtd_registros = df_filtrado.shape[0]
-        custo_medio_por_solicitacao = custo_total / qtd_registros if qtd_registros else 0
-        dias_distintos = df_filtrado['Criado'].dt.date.nunique()
-        custo_medio_diario = custo_total / dias_distintos if dias_distintos else 0
-
+    solicitante = st.selectbox("🙋 Selecione um Solicitante", options=["Todos"] + opcoes(df_filtrado, "Solicitante"))
+    if solicitante != "Todos":
+        df_filtrado = df_filtrado[df_filtrado["Solicitante"] == solicitante]
+        custo_total = df_filtrado["Valor"].sum()
+        qtd = len(df_filtrado)
+        dias = df_filtrado["Criado"].dt.date.nunique()
         col1, col2 = st.columns([1, 3])
-        with col1:
-            st.image("https://cdn-icons-png.flaticon.com/512/1144/1144760.png", width=120)
-            st.subheader(f"{solicitante_select}")
-        with col2:
-            mcol1, mcol2, mcol3 = st.columns(3)
-            mcol1.metric("💰 Custo Total", f"R$ {custo_total:,.2f}")
-            mcol2.metric("⚖️ Custo Médio por Solicitação", f"R$ {custo_medio_por_solicitacao:,.2f}")
-            mcol3.metric("📅 Custo Médio Diário", f"R$ {custo_medio_diario:,.2f}")
-
+        col1.subheader(f"🙋 {solicitante}")
+        m1, m2, m3 = col2.columns(3)
+        m1.metric("💰 Custo Total", brl(custo_total))
+        m2.metric("⚖️ Custo Médio por Solicitação", brl(custo_total / qtd if qtd else 0))
+        m3.metric("📅 Custo Médio Diário", brl(custo_total / dias if dias else 0))
     else:
         st.markdown("### 📊 Resumo Geral")
-        total_geral = df_filtrado['Valor'].sum()
-        qtd_registros = df_filtrado.shape[0]
-
         col1, col2 = st.columns(2)
-        col1.metric("💰 Custo Total no Período", f"R$ {total_geral:,.2f}")
-        col2.metric("📝 Qtd. Registros", qtd_registros)
+        col1.metric("💰 Custo Total no Período", brl(df_filtrado["Valor"].sum()))
+        col2.metric("📝 Qtd. Registros", f"{len(df_filtrado):,}".replace(",", "."))
 
+        if not df_filtrado.empty:
+            st.markdown("### 👥 Custo por Solicitante")
+            por_sol = df_filtrado.groupby("Solicitante").agg(Valor=("Valor", "sum"), Qtd=("ID", "count")).reset_index()
+            por_sol = por_sol.sort_values("Valor")
+            fig = px.bar(por_sol, x="Valor", y="Solicitante", orientation="h", custom_data=["Qtd"],
+                         text=por_sol.apply(lambda r: f"{brl(r['Valor'])} ({r['Qtd']})", axis=1),
+                         color_discrete_sequence=[COR_PRINCIPAL])
+            fig.update_traces(textposition="outside", cliponaxis=False,
+                              hovertemplate="<b>%{y}</b><br>Valor Total: R$ %{x:,.2f}<br>Qtd Solicitações: %{customdata[0]}<extra></extra>")
+            fig.update_xaxes(title="Valor (R$)", range=[0, por_sol["Valor"].max() * 1.35])
+            fig.update_yaxes(title="")
+            mostrar(layout_padrao(fig, altura=max(300, 32 * len(por_sol) + 80)))
 
-        st.markdown("### 👥 Custo por Solicitante")
-        df_por_solicitante = df_filtrado.groupby('Solicitante')['Valor'].sum().reset_index()
+    if not df_filtrado.empty:
+        st.markdown("### 🎯 Custo por Finalidade")
+        mostrar(barras_horizontais(df_filtrado.groupby("Finalidade")["Valor"].sum().reset_index(), "Finalidade"))
 
-        df_por_solicitante = df_filtrado.groupby('Solicitante').agg({
-            'Valor': 'sum',
-            'ID': 'count'  # ou outro campo não nulo para contar registros
-        }).reset_index()
-        df_por_solicitante.rename(columns={'ID': 'QtdSolicitações'}, inplace=True)
-
-        fig_solicitante = px.bar(
-            df_por_solicitante,
-            x='Valor',
-            y='Solicitante',
-            color='Solicitante',
-            orientation='h',
-            text=df_por_solicitante.apply(lambda row: f"R$ {row['Valor']:,.2f} ({row['QtdSolicitações']})", axis=1),
-            labels={'Valor': 'R$', 'Solicitante': 'Solicitante'},
-            custom_data=['QtdSolicitações']  # 👉 Aqui está a diferença
-        )
-
-        fig_solicitante.update_traces(
-            textposition='outside',
-            textfont=dict(size=14, color="black"),
-            cliponaxis=False,
-            hovertemplate='<b>%{y}</b><br>Valor Total: R$ %{x:,.2f}<br>Qtd Solicitações: %{customdata[0]}<extra></extra>'
-        )
-
-
-
-        fig_solicitante.update_traces(
-            textposition='outside',
-            textfont=dict(size=14, color="black"),
-            cliponaxis=False
-        )
-
-        fig_solicitante.update_layout(
-            xaxis_title="Valor (R$)",
-            yaxis_title="Solicitante",
-            yaxis=dict(categoryorder='total ascending'),
-            hoverlabel=dict(font_size=20),
-            margin=dict(l=120, r=40, t=40, b=40)
-        )
-
-        st.plotly_chart(fig_solicitante, use_container_width=True)
-
-    # 🔄 Custo por finalidade (respeita o filtro do solicitante)
-    st.markdown("### 🎯 Custo por Finalidade")
-    df_finalidade = df_filtrado.groupby('Finalidade')['Valor'].sum().reset_index()
-
-    fig_finalidade = px.bar(
-        df_finalidade,
-        x='Finalidade',
-        y='Valor',
-        color='Finalidade',
-        text=df_finalidade['Valor'].apply(lambda x: f"R$ {x:,.2f}"),
-        labels={'Valor': 'R$'}
-    )
-    fig_finalidade.update_traces(
-        textposition='outside',
-        textfont=dict(size=14, color="black"),
-        cliponaxis=False
-    )
-    fig_finalidade.update_layout(
-        xaxis={'categoryorder': 'total descending'},
-        yaxis_title="Valor (R$)",
-        hoverlabel=dict(font_size=20)
-    )
-    st.plotly_chart(fig_finalidade, use_container_width=True)
-
-    # 🔄 Tabela respeita filtros
     st.markdown("### 📋 Tabela de Solicitações")
-    st.dataframe(df_filtrado.style.format({'Valor': 'R$ {:,.2f}'}), use_container_width=True)
+    st.dataframe(df_filtrado, hide_index=True, width="stretch", column_config={
+        "Valor": st.column_config.NumberColumn("Valor (R$)", format="localized"),
+        "Criado": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm"),
+        "ID": st.column_config.NumberColumn(format="%d"),
+    })
+    botao_download(df_filtrado, f"analise_{solicitante}")
 
-    nome_arquivo = f"analise_{solicitante_select}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xlsx"
-    st.download_button("📥 Baixar Dados (Excel)", data=convert_df(df_filtrado), file_name=nome_arquivo, mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 # ----------------------- REUNIÃO MANUTENÇÃO CORPORATIVA -----------------------
-elif menu == "Reunião Manutenção Corporativa":
+def pagina_reuniao():
     st.title("🏗️ Relatório | Reunião de Manutenção Corporativa")
+    f = filtros_sidebar(df, "reu", "Ontem", extras=("Finalidade",))
+    resumo_filtros(f)
+    df_rm = aplicar_filtros(df, f)
 
-    ontem = (datetime.today() - timedelta(days=1)).date()
-    data_inicio = st.sidebar.date_input("📅 Data Início", value=ontem)
-    data_fim = st.sidebar.date_input("📅 Data Fim", value=ontem)
-
-    gestores_default = ["José Marcos", "Alex de França Silva", "Wesley Duarte Assumpcao", "Renan Francisco Cunha", "Tiago Baldo Ribeiro", "José Witalo", "Lucas Martins", "José Carlos de Oliveira", "Mirella da Silva Trindade", "Ruberval Tamarindo da Silva"]
-    status_default = ["Pago"]
-    classif_default = ["Despesa de Veiculo"]
-
-    gestor_sel = st.sidebar.multiselect("Gestor", df['Gestor'].dropna().unique(),
-                                        default=get_default_options(df['Gestor'].dropna().unique(), gestores_default))
-    status_sel = st.sidebar.multiselect("Status", df['Status'].dropna().unique(),
-                                        default=get_default_options(df['Status'].dropna().unique(), status_default))
-    classif_sel = st.sidebar.multiselect("Classificação", df['Classificação'].dropna().unique(),
-                                         default=get_default_options(df['Classificação'].dropna().unique(), classif_default))
-
-    df_rm = df[df['Criado'].dt.date.between(data_inicio, data_fim)]
-    df_rm = df_rm[df_rm['Gestor'].isin(gestor_sel)]
-    df_rm = df_rm[df_rm['Status'].isin(status_sel)]
-    df_rm = df_rm[df_rm['Classificação'].isin(classif_sel)]
-
-    custo_total = df_rm['Valor'].sum()
-    qtd_registros = df_rm.shape[0]
-    custo_medio = custo_total / qtd_registros if qtd_registros else 0
-    maior_solicitacao = df_rm.loc[df_rm['Valor'].idxmax()] if not df_rm.empty else None
-
+    custo_total = df_rm["Valor"].sum()
+    qtd = len(df_rm)
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("💰 Custo Total", f"R$ {custo_total:,.2f}")
-    col2.metric("📋 Custo Médio por Solicitação", f"R$ {custo_medio:,.2f}")
-    col3.metric("📝 Qtd. Registros", qtd_registros)
-    if maior_solicitacao is not None:
-        col4.markdown(f"""
-            <div style='font-size: 24px; font-weight: bold;'>R$ {maior_solicitacao['Valor']:,.2f}</div>
-            <div style='font-size: 14px;'>ID: {maior_solicitacao['ID']} - {maior_solicitacao['Solicitante']}</div>
-        """, unsafe_allow_html=True)
+    col1.metric("💰 Custo Total", brl(custo_total))
+    col2.metric("📋 Custo Médio por Solicitação", brl(custo_total / qtd if qtd else 0))
+    col3.metric("📝 Qtd. Registros", qtd)
+    if qtd:
+        maior = df_rm.loc[df_rm["Valor"].idxmax()]
+        col4.metric("🔝 Maior Solicitação", brl(maior["Valor"]))
+        col4.caption(f"ID {maior['ID']} — {maior['Solicitante']}")
     else:
         col4.metric("🔝 Maior Solicitação", "Sem dados")
 
+    if qtd:
+        st.markdown("### 📈 Custo por Finalidade no Período")
+        mostrar(barras_horizontais(df_rm.groupby("Finalidade")["Valor"].sum().reset_index(), "Finalidade"))
 
-    st.markdown("### 📈 Custo por Finalidade no Período")
-    df_final = df_rm.groupby('Finalidade')['Valor'].sum().reset_index()
-
-    fig_final = px.bar(
-        df_final,
-        x='Finalidade',
-        y='Valor',
-        color='Finalidade',
-        text=df_final['Valor'].apply(lambda x: f"R$ {x:,.2f}"),
-        labels={'Valor': 'R$'}
-    )
-
-    fig_final.update_traces(
-        textposition='outside',
-        textfont=dict(size=14, color="black"),
-        cliponaxis=False
-    )
-
-    fig_final.update_layout(
-        hoverlabel=dict(font_size=20),
-        xaxis_title="Finalidade",
-        yaxis_title="Valor (R$)",
-        margin=dict(t=40, b=40, l=60, r=40)
-    )
-
-    st.plotly_chart(fig_final, use_container_width=True)
-
-    st.markdown("### 🔮 Projeção de Custo HOJE (base últimos 5 dias)")
-    ultimos_5_dias = df[(df['Criado'] >= datetime.today() - timedelta(days=5)) & (df['Status'].isin(status_sel))]
-    custo_diario = ultimos_5_dias.groupby(ultimos_5_dias['Criado'].dt.date)['Valor'].sum().reset_index()
-    if not custo_diario.empty:
-        media_diaria = custo_diario['Valor'].mean()
-        st.success(f"🔜 Projeção de custo para HOJE: **R$ {media_diaria:,.2f}**")
-    else:
-        st.warning("⚠️ Não há dados suficientes nos últimos 5 dias para estimar uma projeção.")
+    st.markdown("### 🔮 Projeção de custo para hoje")
+    sem_data = aplicar_filtros(df, f, usar_datas=False)
+    eh_util = HOJE.weekday() < 5
+    diario = custo_diario(sem_data)
+    hist = historico_ritmo(diario, HOJE)[eh_util]
+    lancado = serie_diaria(diario, HOJE, HOJE).sum()
+    tipo = "dia útil" if eh_util else "dia de fim de semana"
+    st.success(f"🔜 Custo esperado para hoje ({HOJE:%d/%m}, {tipo}): **{brl(max(hist.mean(), lancado))}** "
+               f"· já lançado: {brl(lancado)}")
+    st.caption(f"Média dos dias do mesmo tipo nos últimos {JANELA_PROJECAO} dias fechados. "
+               f"Em 80% desses dias o custo ficou entre {brl(hist.quantile(0.10))} e {brl(hist.quantile(0.90))}.")
 
     st.markdown("### 📋 Tabela Detalhada")
-    colunas_desejadas = ['ID', 'Title', 'Valor', 'Finalidade', 'Solicitante', 'Descrição', 'Gestor', 'Nome do favorecido']
-    colunas_existentes = [col for col in colunas_desejadas if col in df_rm.columns]
-    st.dataframe(df_rm[colunas_existentes].style.format({'Valor': 'R$ {:,.2f}'}), use_container_width=True)
+    colunas = ["ID", "Title", "Valor", "Finalidade", "Solicitante", "Descrição", "Gestor", "Nome Favorecido"]
+    st.dataframe(df_rm[colunas], hide_index=True, width="stretch", column_config={
+        "Valor": st.column_config.NumberColumn("Valor (R$)", format="localized"),
+        "ID": st.column_config.NumberColumn(format="%d"),
+    })
 
-    import time
-    import threading
-    import webbrowser           
 
-    def abrir_navegador():
-        time.sleep(2)
-        webbrowser.open("http://localhost:8501")
-        
-    threading.Thread(target=abrir_navegador).start()
+PAGINAS = {
+    "Custos da Manutenção": pagina_manutencao,
+    "Análise Detalhada": pagina_detalhada,
+    "Reunião Manutenção Corporativa": pagina_reuniao,
+}
+PAGINAS[menu]()
