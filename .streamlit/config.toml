@@ -1,0 +1,10 @@
+[theme]
+primaryColor = "#4a6785"
+baseRadius = "0.5rem"
+
+[client]
+showSidebarNavigation = false
+toolbarMode = "viewer"
+
+[browser]
+gatherUsageStats = false

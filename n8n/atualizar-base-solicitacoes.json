@@ -1,0 +1,376 @@
+{
+  "name": "Dashboard Manutenção - Atualizar base de Solicitações de Depósito",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Atualização da base do dashboard\n\n**O que faz:** lê a lista *Solicitação de Depositos* (Intranet) direto do SharePoint, gera o Excel com as colunas que o dashboard usa (sem CPF/dados bancários) e substitui o arquivo no GitHub.\n\n**Configurar uma vez:**\n1. **Credencial SharePoint** (nós *Campos da lista* e *Itens da lista*): OAuth2 genérica, *Authorization Code*.\n   - Authorization URL: `https://login.microsoftonline.com/<TENANT_ID>/oauth2/v2.0/authorize`\n   - Access Token URL: `https://login.microsoftonline.com/<TENANT_ID>/oauth2/v2.0/token`\n   - Client ID / Secret: do app registrado no Entra ID (permissão delegada SharePoint **AllSites.Read**)\n   - Scope: `https://grupotransmaroni.sharepoint.com/AllSites.Read offline_access`\n   - Authentication: *Body*\n2. **Credencial GitHub** (nó *Atualizar arquivo no GitHub*): token *fine-grained* só deste repositório, permissão **Contents: Read and write**.\n3. Rodar uma vez pelo *Executar manualmente* e conferir o commit.\n\n**Segurança:** se vier menos linhas que `minimoLinhas`, o fluxo para com erro e **não** sobrescreve o arquivo.",
+        "height": 620,
+        "width": 520,
+        "color": 7
+      },
+      "id": "fa5a4251-0115-4bd0-abf5-25f28f900f08",
+      "name": "Leia-me",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -560,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6,13 * * 1-6"
+            }
+          ]
+        }
+      },
+      "id": "ea5829b8-020c-4d75-84bd-b8e381f6169c",
+      "name": "Agendamento (seg–sáb 6h e 13h)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "a6cf3f45-d61c-4ec0-b833-bf8dfb16dd92",
+      "name": "Executar manualmente",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c5a2b3f8-d3b1-497e-aa35-a64808774c8f",
+              "name": "siteUrl",
+              "type": "string",
+              "value": "https://grupotransmaroni.sharepoint.com/sites/Intranet"
+            },
+            {
+              "id": "057c8df3-9e9d-4a56-93a4-cd6a061b2402",
+              "name": "listId",
+              "type": "string",
+              "value": "4f9b1140-dda4-4de4-97ff-40f386086115"
+            },
+            {
+              "id": "748370e0-cb6b-4332-b9fd-63db5c46add3",
+              "name": "linhasPorPagina",
+              "type": "number",
+              "value": 5000
+            },
+            {
+              "id": "6b640c96-9e9e-4a21-aadc-2787af0a1b3e",
+              "name": "minimoLinhas",
+              "type": "number",
+              "value": 100000
+            },
+            {
+              "id": "1279d867-b328-49d8-93da-5748b77ded5b",
+              "name": "githubOwner",
+              "type": "string",
+              "value": "LucasMaroni"
+            },
+            {
+              "id": "fb7068ed-d733-440e-99c7-50ebc86621b5",
+              "name": "githubRepo",
+              "type": "string",
+              "value": "Solicitacoes-de-Depositos"
+            },
+            {
+              "id": "ff6f5061-c6e7-4822-ad0f-df29608cdd37",
+              "name": "arquivo",
+              "type": "string",
+              "value": "Projeto-custo-diário-solicitações-de-depósitos.xlsx"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1d8e3da5-9406-4185-9a22-12a139dca023",
+      "name": "Configuração",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.siteUrl }}/_api/web/lists(guid'{{ $json.listId }}')/fields?$filter=Hidden eq false&$select=Title,InternalName,TypeAsString",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json;odata=nometadata"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "23800780-f1e9-49c7-a545-0e0681946c69",
+      "name": "Campos da lista",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        100
+      ],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "",
+          "name": "SharePoint - Intranet (OAuth2)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Descobre o nome interno de cada coluna na lista e monta a consulta paginada.\nconst cfg = $('Configuração').first().json;\nconst campos = $input.first().json.value || [];\n\n// Coluna na planilha -> nomes de exibição possíveis na lista (sem diferenciar acento/maiúscula/espaço)\nconst COLUNAS = {\n  'ID':                   ['ID'],\n  'Criado':               ['Criado', 'Created'],\n  'Status':               ['Status'],\n  'Classificação':        ['Classificação'],\n  'Finalidade':           ['Finalidade'],\n  'Title':                ['Title', 'Título'],\n  'Descrição':            ['Descrição'],\n  'Solicitante':          ['Solicitante'],\n  'Valor':                ['Valor', 'Valor Deposito', 'Valor Depósito'],\n  'Placa Cavalo/Carreta': ['Placa Cavalo/Carreta'],\n  'Gestor':               ['Gestor'],\n  'Ordem de Serviço':     ['Ordem de Serviço'],\n  'Modificado':           ['Modificado', 'Modified'],\n  'Empresa':              ['Empresa'],\n};\nconst FIXOS = { 'ID': 'ID', 'Criado': 'Created', 'Modificado': 'Modified', 'Title': 'Title' };\n\nconst norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();\nconst mapa = {};\nconst faltando = [];\nfor (const [coluna, nomes] of Object.entries(COLUNAS)) {\n  if (FIXOS[coluna]) {\n    const f = campos.find(c => c.InternalName === FIXOS[coluna]);\n    mapa[coluna] = { interno: FIXOS[coluna], tipo: f ? f.TypeAsString : '' };\n    continue;\n  }\n  const alvo = nomes.map(norm);\n  const f = campos.find(c => alvo.includes(norm(c.Title)) || alvo.includes(norm(c.InternalName)));\n  if (f) mapa[coluna] = { interno: f.InternalName, tipo: f.TypeAsString };\n  else faltando.push(coluna);\n}\nif (faltando.length) {\n  throw new Error('Colunas não encontradas na lista: ' + faltando.join(', ') +\n    '. Colunas disponíveis: ' + campos.map(c => c.Title).join(' | '));\n}\n\nconst viewFields = Object.values(mapa).map(m => `<FieldRef Name=\"${m.interno}\"/>`).join('');\nconst viewXml = '<View Scope=\"RecursiveAll\">' +\n  '<Query><OrderBy><FieldRef Name=\"ID\" Ascending=\"TRUE\"/></OrderBy></Query>' +\n  `<ViewFields>${viewFields}</ViewFields>` +\n  `<RowLimit Paged=\"TRUE\">${cfg.linhasPorPagina}</RowLimit></View>`;\n\nreturn [{ json: {\n  endpoint: `${cfg.siteUrl}/_api/web/lists(guid'${cfg.listId}')/RenderListDataAsStream`,\n  corpo: { parameters: { RenderOptions: 2, ViewXml: viewXml, DatesInUtc: true } },\n  mapa,\n} }];\n"
+      },
+      "id": "4ddf1b20-150d-41b9-853c-fd243abf1e50",
+      "name": "Montar consulta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.endpoint }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json;odata=nometadata"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.corpo) }}",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "responseContainsNextURL",
+              "nextURL": "={{ $('Montar consulta').first().json.endpoint }}{{ $response.body.NextHref }}",
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.NextHref }}",
+              "limitPagesFetched": true,
+              "maxRequests": 200,
+              "requestInterval": 300
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "545a4090-1892-41b4-bc7f-0e56cad03206",
+      "name": "Itens da lista (paginado)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        100
+      ],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "",
+          "name": "SharePoint - Intranet (OAuth2)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Junta todas as páginas e converte para as mesmas colunas/formatos da exportação do Excel.\nconst cfg = $('Configuração').first().json;\nconst { mapa } = $('Montar consulta').first().json;\nconst linhas = $input.all().flatMap(i => i.json.Row || []);\n\n// Trava de segurança: não sobrescreve a base boa com uma leitura incompleta\nif (linhas.length < Number(cfg.minimoLinhas)) {\n  throw new Error(`Leitura incompleta: ${linhas.length} linhas (mínimo ${cfg.minimoLinhas}). Arquivo NÃO atualizado.`);\n}\n\nconst entidades = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '\"', '&#39;': \"'\", '&nbsp;': ' ' };\nconst limparTexto = s => String(s)\n  .replace(/<br\\s*\\/?>/gi, '\\n').replace(/<\\/(p|div)>/gi, '\\n').replace(/<[^>]+>/g, '')\n  .replace(/&#(\\d+);/g, (_, n) => String.fromCharCode(Number(n)))\n  .replace(/&[a-z#0-9]+;/gi, e => entidades[e] ?? e)\n  .replace(/​/g, '').replace(/\\n{2,}/g, '\\n').trim();\n\nconst texto = v => {\n  if (v === null || v === undefined) return '';\n  if (Array.isArray(v)) return v.map(texto).filter(Boolean).join('; ');\n  if (typeof v === 'object') return texto(v.title ?? v.lookupValue ?? v.Label ?? v.value ?? '');\n  return limparTexto(v);\n};\n\nconst numero = (r, interno) => {\n  const bruto = r[interno + '.'];                    // valor sem formatação, ex.: \"360.000000000000\"\n  if (bruto !== undefined && bruto !== '') return Number(bruto);\n  const v = r[interno];\n  if (v === undefined || v === null || v === '') return null;\n  return Number(String(v).replace(/[^\\d,.-]/g, '').replace(/\\./g, '').replace(',', '.'));\n};\n\nconst dataHora = (r, interno) => {\n  const v = r[interno + '.'] || r[interno];\n  if (!v) return '';\n  let d = DateTime.fromISO(String(v), { zone: 'utc' });\n  if (!d.isValid) d = DateTime.fromFormat(String(v), 'dd/MM/yyyy HH:mm', { zone: 'utc' });\n  if (!d.isValid) return String(v);\n  return d.setZone('America/Sao_Paulo').toFormat('yyyy-MM-dd HH:mm:ss');\n};\n\nconst TIPOS_NUMERO = ['Number', 'Currency', 'Counter', 'Integer'];\nconst TIPOS_DATA = ['DateTime'];\n\nreturn linhas.map(r => {\n  const saida = {};\n  for (const [coluna, { interno, tipo }] of Object.entries(mapa)) {\n    if (TIPOS_NUMERO.includes(tipo) || coluna === 'ID' || coluna === 'Valor') saida[coluna] = numero(r, interno);\n    else if (TIPOS_DATA.includes(tipo) || coluna === 'Criado' || coluna === 'Modificado') saida[coluna] = dataHora(r, interno);\n    else saida[coluna] = texto(r[interno]);\n  }\n  return { json: saida };\n});\n"
+      },
+      "id": "274e9376-0cad-4130-a61f-3c9c16160fa9",
+      "name": "Montar planilha",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "xlsx",
+        "binaryPropertyName": "data",
+        "options": {
+          "fileName": "={{ $('Configuração').first().json.arquivo }}",
+          "sheetName": "Solicitacoes"
+        }
+      },
+      "id": "2171d41b-59ba-42a5-9536-69ac64d5c110",
+      "name": "Gerar Excel",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1440,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "edit",
+        "owner": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $('Configuração').first().json.githubOwner }}"
+        },
+        "repository": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $('Configuração').first().json.githubRepo }}"
+        },
+        "filePath": "={{ $('Configuração').first().json.arquivo }}",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "commitMessage": "=chore(dados): atualiza base de solicitações ({{ $now.setZone('America/Sao_Paulo').toFormat('dd/MM/yyyy HH:mm') }} · {{ $('Montar planilha').all().length }} registros)"
+      },
+      "id": "960426d6-4591-4685-ad6f-3614d5fee4e6",
+      "name": "Atualizar arquivo no GitHub",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1.1,
+      "position": [
+        1680,
+        100
+      ],
+      "credentials": {
+        "githubApi": {
+          "id": "",
+          "name": "GitHub - Solicitacoes-de-Depositos"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 10000
+    }
+  ],
+  "connections": {
+    "Agendamento (seg–sáb 6h e 13h)": {
+      "main": [
+        [
+          {
+            "node": "Configuração",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Executar manualmente": {
+      "main": [
+        [
+          {
+            "node": "Configuração",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configuração": {
+      "main": [
+        [
+          {
+            "node": "Campos da lista",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Campos da lista": {
+      "main": [
+        [
+          {
+            "node": "Montar consulta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar consulta": {
+      "main": [
+        [
+          {
+            "node": "Itens da lista (paginado)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Itens da lista (paginado)": {
+      "main": [
+        [
+          {
+            "node": "Montar planilha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar planilha": {
+      "main": [
+        [
+          {
+            "node": "Gerar Excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar Excel": {
+      "main": [
+        [
+          {
+            "node": "Atualizar arquivo no GitHub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true,
+    "executionTimeout": 1800
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
